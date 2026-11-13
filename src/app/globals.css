@@ -1,26 +1,165 @@
 @import "tailwindcss";
 
+/* ─── Design Tokens ──────────────────────────────────────────────────────────
+   Content Studio uses a dark-first design system suited for a professional
+   video editing application. All tokens are defined here and referenced via
+   Tailwind's @theme block so they are available as utility classes.
+   ─────────────────────────────────────────────────────────────────────────── */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Surface hierarchy */
+  --cs-bg-base: #0d0d0f;
+  /* deepest background */
+  --cs-bg-surface: #131316;
+  /* primary panel surface */
+  --cs-bg-elevated: #1a1a1f;
+  /* raised panels, sidebars */
+  --cs-bg-overlay: #22222a;
+  /* dropdowns, tooltips, popovers */
+  --cs-bg-muted: #1e1e24;
+  /* subtle container fill */
+  --cs-bg-hover: #26262f;
+  /* interactive hover state */
+  --cs-bg-active: #2e2e38;
+  /* pressed / selected state */
+
+  /* Borders */
+  --cs-border-subtle: #22222a;
+  /* panel dividers, low-contrast */
+  --cs-border-default: #2d2d38;
+  /* standard borders */
+  --cs-border-strong: #3d3d4d;
+  /* emphasis borders */
+  --cs-border-focus: #6366f1;
+  /* keyboard focus ring */
+
+  /* Text */
+  --cs-text-primary: #f0f0f4;
+  /* headings, primary content */
+  --cs-text-secondary: #9898a8;
+  /* supporting text */
+  --cs-text-tertiary: #60606e;
+  /* placeholders, disabled */
+  --cs-text-inverse: #0d0d0f;
+  /* text on bright surfaces */
+
+  /* Brand / accent */
+  --cs-accent: #6366f1;
+  /* primary action, focus */
+  --cs-accent-hover: #818cf8;
+  /* accent hover */
+  --cs-accent-subtle: #1e1e30;
+  /* accent tinted background */
+
+  /* Semantic */
+  --cs-success: #34d399;
+  --cs-warning: #fbbf24;
+  --cs-error: #f87171;
+  --cs-info: #60a5fa;
+
+  /* Radius */
+  --cs-radius-sm: 4px;
+  --cs-radius-md: 6px;
+  --cs-radius-lg: 8px;
+  --cs-radius-xl: 12px;
+
+  /* Transition */
+  --cs-transition: 150ms ease;
 }
+
+/* ─── Tailwind Theme Extension ───────────────────────────────────────────── */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--cs-bg-base);
+  --color-foreground: var(--cs-text-primary);
+  --font-sans: var(--font-geist-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif);
+  --font-mono: var(--font-geist-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+
+  /* Expose design tokens as Tailwind colors */
+  --color-cs-bg-base: var(--cs-bg-base);
+  --color-cs-bg-surface: var(--cs-bg-surface);
+  --color-cs-bg-elevated: var(--cs-bg-elevated);
+  --color-cs-bg-overlay: var(--cs-bg-overlay);
+  --color-cs-bg-muted: var(--cs-bg-muted);
+  --color-cs-bg-hover: var(--cs-bg-hover);
+  --color-cs-bg-active: var(--cs-bg-active);
+
+  --color-cs-border-subtle: var(--cs-border-subtle);
+  --color-cs-border-default: var(--cs-border-default);
+  --color-cs-border-strong: var(--cs-border-strong);
+  --color-cs-border-focus: var(--cs-border-focus);
+
+  --color-cs-text-primary: var(--cs-text-primary);
+  --color-cs-text-secondary: var(--cs-text-secondary);
+  --color-cs-text-tertiary: var(--cs-text-tertiary);
+  --color-cs-text-inverse: var(--cs-text-inverse);
+
+  --color-cs-accent: var(--cs-accent);
+  --color-cs-accent-hover: var(--cs-accent-hover);
+  --color-cs-accent-subtle: var(--cs-accent-subtle);
+
+  --color-cs-success: var(--cs-success);
+  --color-cs-warning: var(--cs-warning);
+  --color-cs-error: var(--cs-error);
+  --color-cs-info: var(--cs-info);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ─── Base Reset ─────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100%;
+  margin: 0;
+  background: var(--cs-bg-base);
+  color: var(--cs-text-primary);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+/* ─── Focus Styles ───────────────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid var(--cs-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--cs-radius-sm);
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cs-border-strong);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cs-text-tertiary);
+}
+
+/* ─── Selection ──────────────────────────────────────────────────────────── */
+
+::selection {
+  background: color-mix(in srgb, var(--cs-accent) 35%, transparent);
+  color: var(--cs-text-primary);
 }
