@@ -42,8 +42,15 @@ import {
   listProjects,
   readProject,
   writeProject,
-  deleteProject,
 } from "../lib/workspace.ts";
+import {
+  moveToTrash,
+  listTrashedProjects,
+  restoreFromTrash,
+  permanentlyDeleteProject,
+  emptyTrash,
+} from "../lib/trash.ts";
+import { CacheManagerModal } from "./CacheManagerModal.tsx";
 import {
   saveWorkspaceHandle,
   loadWorkspaceHandle,
@@ -202,13 +209,25 @@ export function WorkspaceHome() {
   const [projectToDelete, setProjectToDelete] = useState<ProjectSummary | null>(null);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
 
+  // Trash & Cache state (Phase 6)
+  const [trashedProjects, setTrashedProjects] = useState<ProjectSummary[]>([]);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"projects" | "trash">("projects");
+  const [projectToPermanentDelete, setProjectToPermanentDelete] = useState<ProjectSummary | null>(null);
+  const [isPermanentlyDeleting, setIsPermanentlyDeleting] = useState(false);
+  const [isRestoringFromTrash, setIsRestoringFromTrash] = useState(false);
+  const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
+
   // Refresh project listing from active workspace
   const refreshProjectsList = useCallback(async (handle: FileSystemDirectoryHandle) => {
     setIsLoadingProjects(true);
     setWorkspaceError(null);
     try {
-      const list = await listProjects(handle);
+      const [list, trashed] = await Promise.all([
+        listProjects(handle),
+        listTrashedProjects(handle),
+      ]);
       setProjects(list);
+      setTrashedProjects(trashed);
     } catch (err: unknown) {
       console.warn("Failed to list projects:", err);
       setWorkspaceError(err instanceof Error ? err.message : "Failed to load projects from workspace.");
@@ -360,14 +379,46 @@ export function WorkspaceHome() {
     }
   };
 
-  // Delete project submission
+  // Move to trash submission (Phase 6 recoverable deletion)
   const handleDeleteProjectSubmit = async () => {
     if (!workspaceHandle || !projectToDelete) return;
 
     setIsDeletingProject(true);
     try {
-      await deleteProject(workspaceHandle, projectToDelete.id);
+      await moveToTrash(workspaceHandle, projectToDelete.id);
       setProjectToDelete(null);
+      await refreshProjectsList(workspaceHandle);
+    } catch (err: unknown) {
+      setWorkspaceError(err instanceof Error ? err.message : "Failed to move project to trash.");
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
+  // Restore project from trash
+  const handleRestoreProject = async (projectId: string) => {
+    if (!workspaceHandle) return;
+    setIsRestoringFromTrash(true);
+    setWorkspaceError(null);
+    try {
+      await restoreFromTrash(workspaceHandle, projectId);
+      await refreshProjectsList(workspaceHandle);
+    } catch (err: unknown) {
+      setWorkspaceError(err instanceof Error ? err.message : "Failed to restore project from trash.");
+    } finally {
+      setIsRestoringFromTrash(false);
+    }
+  };
+
+  // Permanent delete from trash
+  const handlePermanentDeleteSubmit = async () => {
+    if (!workspaceHandle || !projectToPermanentDelete) return;
+
+    setIsPermanentlyDeleting(true);
+    setWorkspaceError(null);
+    try {
+      await permanentlyDeleteProject(workspaceHandle, projectToPermanentDelete.id);
+      setProjectToPermanentDelete(null);
       await refreshProjectsList(workspaceHandle);
 
       // Clean up orphaned handles in background
@@ -393,9 +444,24 @@ export function WorkspaceHome() {
         }
       })();
     } catch (err: unknown) {
-      setWorkspaceError(err instanceof Error ? err.message : "Failed to delete project.");
+      setWorkspaceError(err instanceof Error ? err.message : "Failed to permanently delete project.");
     } finally {
-      setIsDeletingProject(false);
+      setIsPermanentlyDeleting(false);
+    }
+  };
+
+  // Empty all trash
+  const handleEmptyTrashSubmit = async () => {
+    if (!workspaceHandle) return;
+    setIsPermanentlyDeleting(true);
+    setWorkspaceError(null);
+    try {
+      await emptyTrash(workspaceHandle);
+      await refreshProjectsList(workspaceHandle);
+    } catch (err: unknown) {
+      setWorkspaceError(err instanceof Error ? err.message : "Failed to empty trash.");
+    } finally {
+      setIsPermanentlyDeleting(false);
     }
   };
 
@@ -533,6 +599,17 @@ export function WorkspaceHome() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={() => setIsCacheModalOpen(true)}
+                  title="Inspect and clean workspace cache"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                  </svg>
+                  <span className="hidden sm:inline">Cache</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => refreshProjectsList(workspaceHandle)}
                   disabled={isLoadingProjects}
                   title="Reload projects from folder"
@@ -555,135 +632,249 @@ export function WorkspaceHome() {
             {/* Projects List Panel */}
             <Panel as="section" aria-labelledby="projects-heading">
               <PanelHeader
-                title="Projects"
-                description={`${projects.length} project${projects.length === 1 ? "" : "s"} in workspace`}
-                actions={
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      setNewProjectName("Untitled Project");
-                      setIsCreateModalOpen(true);
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    New project
-                  </Button>
+                title="Workspace Projects"
+                description={
+                  activeWorkspaceTab === "projects"
+                    ? `${projects.length} active project${projects.length === 1 ? "" : "s"}`
+                    : `${trashedProjects.length} project${trashedProjects.length === 1 ? "" : "s"} in trash`
                 }
-              />
-
-              {isLoadingProjects ? (
-                <div className="p-8 text-center text-xs text-cs-text-tertiary">
-                  Scanning workspace projects…
-                </div>
-              ) : projects.length === 0 ? (
-                <EmptyState
-                  icon={
-                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" strokeWidth="1.3" stroke="currentColor">
-                      <rect x="2" y="6" width="20" height="12" rx="2" />
-                      <path d="M7 6v12M17 6v12M2 10h20M2 14h20" />
-                    </svg>
-                  }
-                  title="No projects in this workspace"
-                  description="Create a project to start importing local video clips and editing."
-                  action={
+                actions={
+                  activeWorkspaceTab === "projects" ? (
                     <Button
                       variant="primary"
-                      size="md"
+                      size="sm"
                       onClick={() => {
                         setNewProjectName("Untitled Project");
                         setIsCreateModalOpen(true);
                       }}
                     >
-                      Create project
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                      </svg>
+                      New project
                     </Button>
-                  }
-                />
-              ) : (
-                <ul role="list" className="divide-y divide-cs-border-subtle" aria-label="Workspace projects">
-                  {projects.map((proj) => (
-                    <li
-                      key={proj.id}
-                      className="flex items-center justify-between gap-4 p-4 hover:bg-cs-bg-elevated/40 transition-colors"
+                  ) : trashedProjects.length > 0 ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={handleEmptyTrashSubmit}
+                      disabled={isPermanentlyDeleting}
                     >
-                      {/* Left: Project title & metadata */}
-                      <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded bg-cs-bg-muted border border-cs-border-subtle flex items-center justify-center text-cs-text-secondary shrink-0 mt-0.5">
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="1.8" stroke="currentColor">
-                            <rect x="2" y="6" width="20" height="12" rx="2" />
-                            <path d="M7 6v12M17 6v12M2 10h20M2 14h20" />
-                          </svg>
+                      Empty trash
+                    </Button>
+                  ) : null
+                }
+              />
+
+              {/* Tab navigation */}
+              <div className="flex border-b border-cs-border-subtle px-4 pt-1 gap-4 text-xs font-medium">
+                <button
+                  onClick={() => setActiveWorkspaceTab("projects")}
+                  className={`pb-2 border-b-2 transition-colors flex items-center gap-1.5 ${
+                    activeWorkspaceTab === "projects"
+                      ? "border-cs-accent text-cs-accent"
+                      : "border-transparent text-cs-text-secondary hover:text-cs-text-primary"
+                  }`}
+                >
+                  Active Projects
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-cs-bg-elevated text-cs-text-secondary">
+                    {projects.length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setActiveWorkspaceTab("trash")}
+                  className={`pb-2 border-b-2 transition-colors flex items-center gap-1.5 ${
+                    activeWorkspaceTab === "trash"
+                      ? "border-cs-accent text-cs-accent"
+                      : "border-transparent text-cs-text-secondary hover:text-cs-text-primary"
+                  }`}
+                >
+                  Trash
+                  {trashedProjects.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500/15 text-amber-400 font-semibold">
+                      {trashedProjects.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {isLoadingProjects ? (
+                <div className="p-8 text-center text-xs text-cs-text-tertiary">
+                  Scanning workspace projects…
+                </div>
+              ) : activeWorkspaceTab === "projects" ? (
+                projects.length === 0 ? (
+                  <EmptyState
+                    icon={
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" strokeWidth="1.3" stroke="currentColor">
+                        <rect x="2" y="6" width="20" height="12" rx="2" />
+                        <path d="M7 6v12M17 6v12M2 10h20M2 14h20" />
+                      </svg>
+                    }
+                    title="No projects in this workspace"
+                    description="Create a project to start importing local video clips and editing."
+                    action={
+                      <Button
+                        variant="primary"
+                        size="md"
+                        onClick={() => {
+                          setNewProjectName("Untitled Project");
+                          setIsCreateModalOpen(true);
+                        }}
+                      >
+                        Create project
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <ul role="list" className="divide-y divide-cs-border-subtle" aria-label="Workspace projects">
+                    {projects.map((proj) => (
+                      <li
+                        key={proj.id}
+                        className="flex items-center justify-between gap-4 p-4 hover:bg-cs-bg-elevated/40 transition-colors"
+                      >
+                        {/* Left: Project title & metadata */}
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded bg-cs-bg-muted border border-cs-border-subtle flex items-center justify-center text-cs-text-secondary shrink-0 mt-0.5">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="1.8" stroke="currentColor">
+                              <rect x="2" y="6" width="20" height="12" rx="2" />
+                              <path d="M7 6v12M17 6v12M2 10h20M2 14h20" />
+                            </svg>
+                          </div>
+
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleOpenProject(proj.id)}
+                                disabled={!proj.valid || openingProjectId === proj.id}
+                                className="text-sm font-semibold text-cs-text-primary hover:text-cs-accent truncate text-left cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                {proj.name}
+                              </button>
+                              {!proj.valid && (
+                                <Badge variant="error" title={proj.error}>
+                                  Unreadable
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-cs-text-tertiary mt-1">
+                              <span>{proj.assetCount} media reference{proj.assetCount === 1 ? "" : "s"}</span>
+                              <span>·</span>
+                              <span>Updated {new Date(proj.updatedAt).toLocaleDateString()}</span>
+                            </div>
+                          </div>
                         </div>
 
-                        <div className="flex flex-col min-w-0">
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleOpenProject(proj.id)}
-                              disabled={!proj.valid || openingProjectId === proj.id}
-                              className="text-sm font-semibold text-cs-text-primary hover:text-cs-accent truncate text-left cursor-pointer disabled:cursor-not-allowed"
-                            >
-                              {proj.name}
-                            </button>
-                            {!proj.valid && (
-                              <Badge variant="error" title={proj.error}>
-                                Unreadable
-                              </Badge>
-                            )}
+                        {/* Right: Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {proj.valid ? (
+                            <>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => handleOpenProject(proj.id)}
+                                disabled={openingProjectId === proj.id}
+                              >
+                                {openingProjectId === proj.id ? "Opening…" : "Open"}
+                              </Button>
+                              <IconButton
+                                label="Rename project"
+                                size="sm"
+                                onClick={() => {
+                                  setProjectToRename(proj);
+                                  setRenameInputVal(proj.name);
+                                }}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                </svg>
+                              </IconButton>
+                            </>
+                          ) : null}
+
+                          <IconButton
+                            label="Move project to trash"
+                            size="sm"
+                            onClick={() => setProjectToDelete(proj)}
+                            className="hover:text-cs-error"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          </IconButton>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : (
+                /* Trash View */
+                trashedProjects.length === 0 ? (
+                  <EmptyState
+                    icon={
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" strokeWidth="1.3" stroke="currentColor">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                    }
+                    title="Trash is empty"
+                    description="Deleted projects are moved here first. You can restore them or permanently remove them."
+                  />
+                ) : (
+                  <ul role="list" className="divide-y divide-cs-border-subtle" aria-label="Trashed projects">
+                    {trashedProjects.map((proj) => (
+                      <li
+                        key={proj.id}
+                        className="flex items-center justify-between gap-4 p-4 hover:bg-cs-bg-elevated/40 transition-colors"
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" strokeWidth="1.8" stroke="currentColor">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            </svg>
                           </div>
-                          <div className="flex items-center gap-2 text-xs text-cs-text-tertiary mt-1">
-                            <span>{proj.assetCount} media reference{proj.assetCount === 1 ? "" : "s"}</span>
-                            <span>·</span>
-                            <span>Updated {new Date(proj.updatedAt).toLocaleDateString()}</span>
+
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-cs-text-primary truncate">
+                                {proj.name}
+                              </span>
+                              <Badge variant="warning">Trashed</Badge>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-cs-text-tertiary mt-1">
+                              <span>{proj.assetCount} media reference{proj.assetCount === 1 ? "" : "s"}</span>
+                              <span>·</span>
+                              <span>Last modified {new Date(proj.updatedAt).toLocaleDateString()}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Right: Actions */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        {proj.valid ? (
-                          <>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => handleOpenProject(proj.id)}
-                              disabled={openingProjectId === proj.id}
-                            >
-                              {openingProjectId === proj.id ? "Opening…" : "Open"}
-                            </Button>
-                            <IconButton
-                              label="Rename project"
-                              size="sm"
-                              onClick={() => {
-                                setProjectToRename(proj);
-                                setRenameInputVal(proj.name);
-                              }}
-                            >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                              </svg>
-                            </IconButton>
-                          </>
-                        ) : null}
-
-                        <IconButton
-                          label="Delete project"
-                          size="sm"
-                          onClick={() => setProjectToDelete(proj)}
-                          className="hover:text-cs-error"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          </svg>
-                        </IconButton>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleRestoreProject(proj.id)}
+                            disabled={isRestoringFromTrash}
+                          >
+                            Restore
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => setProjectToPermanentDelete(proj)}
+                            disabled={isPermanentlyDeleting}
+                          >
+                            Delete permanently
+                          </Button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )
               )}
             </Panel>
           </>
@@ -767,12 +958,12 @@ export function WorkspaceHome() {
         </form>
       </Modal>
 
-      {/* ─── Delete Project Confirmation Dialog ───────────────────────────── */}
+      {/* ─── Move Project to Trash Confirmation Dialog (Phase 6) ───────────── */}
       <Modal
         open={projectToDelete !== null}
         onClose={() => setProjectToDelete(null)}
-        title="Delete Project"
-        description="This action is permanent and deletes the project document from your workspace."
+        title="Move Project to Trash"
+        description="The project will be moved to the workspace trash and can be restored at any time. Original source media is never deleted."
         footer={
           <>
             <Button
@@ -789,7 +980,7 @@ export function WorkspaceHome() {
               onClick={handleDeleteProjectSubmit}
               disabled={isDeletingProject}
             >
-              {isDeletingProject ? "Deleting…" : "Delete project"}
+              {isDeletingProject ? "Moving…" : "Move to trash"}
             </Button>
           </>
         }
@@ -797,20 +988,74 @@ export function WorkspaceHome() {
         {projectToDelete && (
           <div className="flex flex-col gap-3 text-xs text-cs-text-secondary leading-relaxed">
             <p>
-              Are you sure you want to delete <strong className="text-cs-text-primary">{projectToDelete.name}</strong>?
+              Are you sure you want to move <strong className="text-cs-text-primary">{projectToDelete.name}</strong> to the workspace trash?
             </p>
             <div className="p-3 rounded bg-cs-bg-base border border-cs-border-subtle flex flex-col gap-1 text-[11px]">
-              <span className="text-cs-text-tertiary">Target directory to remove:</span>
+              <span className="text-cs-text-tertiary">Path to move:</span>
               <span className="font-mono text-cs-text-secondary break-all">
-                projects/{projectToDelete.id}/
+                projects/{projectToDelete.id}/ → trash/{projectToDelete.id}/
               </span>
             </div>
             <p className="text-cs-text-tertiary">
-              <strong>Your original video and audio files will NOT be deleted.</strong> Only the project document in your workspace will be removed.
+              <strong>Your original video and audio files will NOT be touched.</strong> You can restore this project anytime from the Trash tab.
             </p>
           </div>
         )}
       </Modal>
+
+      {/* ─── Permanent Delete Confirmation Dialog (Phase 6) ────────────────── */}
+      <Modal
+        open={projectToPermanentDelete !== null}
+        onClose={() => setProjectToPermanentDelete(null)}
+        title="Permanently Delete Project"
+        description="This action is permanent and cannot be undone. Only application-managed project files in the trash will be deleted."
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setProjectToPermanentDelete(null)}
+              disabled={isPermanentlyDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handlePermanentDeleteSubmit}
+              disabled={isPermanentlyDeleting}
+            >
+              {isPermanentlyDeleting ? "Deleting…" : "Delete permanently"}
+            </Button>
+          </>
+        }
+      >
+        {projectToPermanentDelete && (
+          <div className="flex flex-col gap-3 text-xs text-cs-text-secondary leading-relaxed">
+            <p>
+              Permanently delete <strong className="text-cs-text-primary">{projectToPermanentDelete.name}</strong> from trash?
+            </p>
+            <div className="p-3 rounded bg-cs-error/10 border border-cs-error/20 text-cs-error text-[11px] space-y-1">
+              <p className="font-semibold">Irreversible Action</p>
+              <p>
+                All snapshots and export records for this project in <code>trash/{projectToPermanentDelete.id}/</code> will be permanently removed.
+              </p>
+            </div>
+            <p className="text-cs-text-tertiary">
+              <strong>Your original camera/source media files will NOT be deleted or altered.</strong>
+            </p>
+          </div>
+        )}
+      </Modal>
+
+      {/* ─── Workspace Cache Management Modal (Phase 6) ──────────────────── */}
+      {workspaceHandle && (
+        <CacheManagerModal
+          isOpen={isCacheModalOpen}
+          workspaceHandle={workspaceHandle}
+          onClose={() => setIsCacheModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

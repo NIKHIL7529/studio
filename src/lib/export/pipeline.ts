@@ -25,6 +25,7 @@ import {
 import { createMediaInput, disposeMediaInput } from "../media/input.ts";
 import { createWorkspaceProgressiveWriter } from "./progressiveWriter.ts";
 import { validateExportedMedia } from "./validation.ts";
+import { lockCacheResource, unlockCacheResource } from "../cache/cacheManager.ts";
 import type { TextOverlay } from "../../types/timeline.ts";
 import type {
   RenderPlan,
@@ -151,6 +152,8 @@ export async function renderAndExport(
     preferredFilename: plan.settings.filename,
     allowOverwrite,
   });
+
+  lockCacheResource(writer.relativePath);
 
   const openedInputs: ReturnType<typeof createMediaInput>[] = [];
   let output: Output | null = null;
@@ -365,6 +368,7 @@ export async function renderAndExport(
     reportProgress("failed", 0, `Export failed: ${message}`);
     throw err;
   } finally {
+    unlockCacheResource(writer.relativePath);
     // Clean up all opened media inputs
     for (const input of openedInputs) {
       disposeMediaInput(input);

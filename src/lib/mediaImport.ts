@@ -11,6 +11,7 @@
 
 import type { ProjectAsset, MediaCategory, LiveAssetItem } from "../types/project.ts";
 import { saveFileHandle, loadFileHandle, removeFileHandle } from "./idb.ts";
+import { computeMediaFingerprint } from "./media/fingerprint.ts";
 
 // In-memory registry for session-only files (from fallback file input)
 const sessionFileRegistry = new Map<string, File>();
@@ -114,6 +115,13 @@ export async function pickAndImportFiles(
 
     const category = inferMediaCategory(file.name, file.type);
 
+    let fingerprint: string | undefined = undefined;
+    try {
+      fingerprint = await computeMediaFingerprint(file);
+    } catch {
+      // non-fatal
+    }
+
     newAssets.push({
       id: generateAssetId(),
       name: file.name,
@@ -122,6 +130,7 @@ export async function pickAndImportFiles(
       size: file.size,
       lastModified: file.lastModified,
       handleRefId,
+      ...(fingerprint ? { fingerprint } : {}),
     });
   }
 
@@ -154,6 +163,13 @@ export async function importFallbackFiles(
 
     const category = inferMediaCategory(file.name, file.type);
 
+    let fingerprint: string | undefined = undefined;
+    try {
+      fingerprint = await computeMediaFingerprint(file);
+    } catch {
+      // non-fatal
+    }
+
     newAssets.push({
       id: generateAssetId(),
       name: file.name,
@@ -162,6 +178,7 @@ export async function importFallbackFiles(
       size: file.size,
       lastModified: file.lastModified,
       handleRefId,
+      ...(fingerprint ? { fingerprint } : {}),
     });
   }
 
@@ -280,34 +297,75 @@ export interface RelinkComparison {
   nameDiffers: boolean;
   sizeDiffers: boolean;
   dateDiffers: boolean;
-  original: { name: string; size: number; lastModified?: number };
-  replacement: { name: string; size: number; lastModified?: number };
+  fingerprintDiffers?: boolean;
+  fingerprintMatched?: boolean;
+  original: { name: string; size: number; lastModified?: number; fingerprint?: string };
+  replacement: { name: string; size: number; lastModified?: number; fingerprint?: string };
 }
 
 /**
  * Inspects a replacement file before relinking to compare against the original asset record.
  */
-export function compareRelinkMetadata(asset: ProjectAsset, newFile: File): RelinkComparison {
+export function compareRelinkMetadata(
+  asset: ProjectAsset,
+  newFile: File,
+  replacementFingerprint?: string
+): RelinkComparison {
   const nameDiffers = asset.name !== newFile.name;
   const sizeDiffers = asset.size !== newFile.size;
   const dateDiffers = asset.lastModified !== undefined && asset.lastModified !== newFile.lastModified;
 
+  let fingerprintDiffers: boolean | undefined = undefined;
+  let fingerprintMatched: boolean | undefined = undefined;
+
+  if (asset.fingerprint && replacementFingerprint) {
+    if (asset.fingerprint === replacementFingerprint) {
+      fingerprintMatched = true;
+      fingerprintDiffers = false;
+    } else {
+      fingerprintDiffers = true;
+      fingerprintMatched = false;
+    }
+  }
+
+  const isMatch = !nameDiffers && !sizeDiffers && !dateDiffers && fingerprintDiffers !== true;
+
   return {
-    match: !nameDiffers && !sizeDiffers && !dateDiffers,
+    match: isMatch,
     nameDiffers,
     sizeDiffers,
     dateDiffers,
+    fingerprintDiffers,
+    fingerprintMatched,
     original: {
       name: asset.name,
       size: asset.size,
       lastModified: asset.lastModified,
+      fingerprint: asset.fingerprint,
     },
     replacement: {
       name: newFile.name,
       size: newFile.size,
       lastModified: newFile.lastModified,
+      fingerprint: replacementFingerprint,
     },
   };
+}
+
+/**
+ * Asynchronously inspects a replacement file including content fingerprint calculation.
+ */
+export async function compareRelinkWithFingerprint(
+  asset: ProjectAsset,
+  newFile: File
+): Promise<RelinkComparison> {
+  let repFingerprint: string | undefined = undefined;
+  try {
+    repFingerprint = await computeMediaFingerprint(newFile);
+  } catch {
+    // fingerprint computation failure fallback
+  }
+  return compareRelinkMetadata(asset, newFile, repFingerprint);
 }
 
 /**
@@ -326,6 +384,13 @@ export async function relinkAssetHandle(
     lastModified: newFile.lastModified,
   });
 
+  let fingerprint: string | undefined = undefined;
+  try {
+    fingerprint = await computeMediaFingerprint(newFile);
+  } catch {
+    // optional fingerprint computation failure
+  }
+
   return {
     ...asset,
     name: newFile.name,
@@ -334,6 +399,7 @@ export async function relinkAssetHandle(
     mediaType: inferMediaCategory(newFile.name, newFile.type),
     mimeType: newFile.type || asset.mimeType,
     metadata: undefined, // Clear metadata so relinked file is freshly inspected
+    ...(fingerprint ? { fingerprint } : {}),
   };
 }
 

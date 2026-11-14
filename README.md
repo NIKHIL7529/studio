@@ -2,8 +2,8 @@
 
 A browser-based, local-first video editor and repurposing workspace.
 
-> **Phase 5 — Local video rendering and export.**  
-> This release implements the complete local export pipeline from the timeline to playable output files: deterministic render-plan generation, WebCodecs/Mediabunny composition and encoding, progressive disk streaming to the user's workspace, output validation, and project export history.
+> **Phase 6 — Project revisions, export history, workspace trash, and cache lifecycle.**  
+> This release implements durable project persistence, recoverable project revisions/checkpoints, generation and export output management, conservative cache inventory and safe cleanup, workspace trash for project recovery, and bounded media fingerprinting for reliable source relinking.
 
 ---
 
@@ -45,6 +45,54 @@ Content Studio lets you import your own videos, arrange clips on a timeline, add
 | Progressive disk streaming to workspace | ✅ Implemented (Phase 5) |
 | Local output validation & smoke testing | ✅ Implemented (Phase 5) |
 | Export history persistence & cancellation safeguards | ✅ Implemented (Phase 5) |
+| Project revisions, checkpoints & non-destructive restore | ✅ Implemented (Phase 6) |
+| Generation & export output management (download, rename, delete) | ✅ Implemented (Phase 6) |
+| Cache inventory, resource locking & safe dry-run cleanup | ✅ Implemented (Phase 6) |
+| Workspace trash & reversible project deletion | ✅ Implemented (Phase 6) |
+| Bounded media fingerprinting & verified relinking | ✅ Implemented (Phase 6) |
+
+---
+
+## Phase 6 Project Revisions, Cache Lifecycle & Safe Storage
+
+### 1. Recoverable Project Revisions & Checkpoints
+- Project revisions are stored in `projects/<id>/revisions/revision-<timestamp>-<id>.json`.
+- **Automatic duplicate suppression:** Before saving a new snapshot, the state is compared canonically with the latest revision (excluding volatile timestamps like `updatedAt`); identical documents do not create redundant revisions.
+- **Pre-restore safety checkpoint:** Restoring an older revision automatically creates a snapshot of the current state before replacing it, guaranteeing zero data loss.
+- **Export preservation:** When an earlier revision is restored, completed export records are merged from the current document so that finished renders produced after the snapshot was created are never lost.
+- **Bounded retention:** Keeps the 50 most recent revisions per project to prevent unbounded growth.
+
+### 2. Generation & Export Output Management
+- Completed exports are tracked with their full render settings, duration, resolution, profile, and timestamps.
+- **Status verification:** Checks on-disk file presence via the File System Access API and flags deleted/moved files with a clear "Missing File" badge rather than silently removing the history entry.
+- **Safe output management:** Users can download/reveal, rename (without changing output format), or delete application-managed export files directly.
+- **Original source isolation:** Deleting an export file operates strictly on the output file inside `projects/<id>/exports/`; original source files remain completely untouched.
+
+### 3. Local Cache Inventory & Safe Lifecycle
+- Distinguishes five storage categories:
+  1. *Original source media* (user-owned, never touched).
+  2. *Project documents and revisions* (durable user data, never treated as cache).
+  3. *Completed exports* (durable user outputs, never treated as cache).
+  4. *Regenerable derived assets* (thumbnails, waveforms, preview proxies inside project cache).
+  5. *Temporary processing files* (abandoned `.tmp_*` files, interrupted render chunks).
+- **In-use resource locking:** Active playback, preview rendering, and export pipelines acquire locks (`lockCacheResource`) so in-flight tasks cannot have their cache or staging files pruned.
+- **Safe cleanup & dry-run:** Scans only application-managed cache directories (`projects/<id>/cache/`, root `.cache/`, and `.tmp_*` temporary files). Provides a dry-run preview reporting reclaimable space before user confirms deletion.
+- **Non-destructive:** Unknown files, user documents, and external files are strictly ignored.
+
+### 4. Workspace Trash Model
+- Deleting a project moves its directory from `projects/<id>` to `trash/<id>` with deleted timestamp metadata (`trashedAt`).
+- **Reversible deletion:** Trashed projects can be browsed and restored back to active projects at any time.
+- **Permanent deletion:** Requires explicit user confirmation; only deletes Content Studio's application-managed folder for that project.
+- **Zero source impact:** Moving to trash or permanently deleting a project never deletes original source media referenced by that project.
+
+### 5. Media Fingerprinting & Relinking Verification
+- Uses a fast, non-blocking SHA-256 fingerprint computed across the file size, last modified time, and 128 KB head and tail chunks (`src/lib/media/fingerprint.ts`).
+- Avoids hashing entire multi-gigabyte video files while providing strong resistance against accidental file mismatches.
+- During relinking of missing media, fingerprints and file metrics (duration, dimensions, file size) are validated. If a mismatch is detected, the user is warned with specific differences before accepting the relink.
+
+### 6. Strict Storage Boundaries
+- Workspace folder selected by the user is the sole durable source of truth.
+- OPFS and IndexedDB are strictly bounded to metadata, transient locks, and disposable buffers; video media is never duplicated into OPFS or IndexedDB.
 
 ---
 

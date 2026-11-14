@@ -110,6 +110,11 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
 
   const metadata = validateInspectedMetadata(obj.metadata);
 
+  let fingerprint: string | undefined = undefined;
+  if (typeof obj.fingerprint === "string" && obj.fingerprint.trim().length > 0) {
+    fingerprint = obj.fingerprint.trim();
+  }
+
   return {
     ok: true,
     data: {
@@ -122,6 +127,7 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
       handleRefId: (obj.handleRefId as string).trim(),
       sourceLocator,
       metadata,
+      ...(fingerprint ? { fingerprint } : {}),
     },
   };
 }

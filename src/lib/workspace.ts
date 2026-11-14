@@ -249,7 +249,6 @@ export async function writeProject(
 
   const projectsDir = await getProjectsDirectory(workspaceHandle, true);
   const projectDir = await projectsDir.getDirectoryHandle(doc.id, { create: true });
-  const fileHandle = await projectDir.getFileHandle(PROJECT_DOC_FILE_NAME, { create: true });
 
   const updatedDoc: ProjectDocument = {
     ...doc,
@@ -258,6 +257,53 @@ export async function writeProject(
 
   const serialized = serializeProjectDocument(updatedDoc);
 
+  // Staged safe write: write to temporary file first if atomic move is supported
+  const tempFilename = `.tmp_save_${Math.random().toString(36).slice(2, 8)}.json`;
+  let tempHandle: FileSystemFileHandle | null = null;
+  let hasAtomicMove = false;
+
+  try {
+    const candidate = await projectDir.getFileHandle(tempFilename, { create: true });
+    if (typeof (candidate as unknown as { move?: (name: string) => Promise<void> }).move === "function") {
+      tempHandle = candidate;
+      hasAtomicMove = true;
+    } else if (typeof projectDir.removeEntry === "function") {
+      try {
+        await projectDir.removeEntry(tempFilename);
+      } catch {}
+    }
+  } catch {
+    hasAtomicMove = false;
+  }
+
+  if (hasAtomicMove && tempHandle) {
+    let writable: FileSystemWritableFileStream | null = null;
+    try {
+      writable = await tempHandle.createWritable();
+      await writable.write(serialized);
+      await writable.close();
+      writable = null;
+
+      // Atomically promote temp file to project.json
+      await (tempHandle as unknown as { move: (name: string) => Promise<void> }).move(PROJECT_DOC_FILE_NAME);
+      return updatedDoc;
+    } catch (err) {
+      if (writable) {
+        try {
+          await writable.abort();
+        } catch {}
+      }
+      try {
+        if (typeof projectDir.removeEntry === "function") {
+          await projectDir.removeEntry(tempFilename);
+        }
+      } catch {}
+      throw new Error(`Failed to write project document: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Direct write fallback
+  const fileHandle = await projectDir.getFileHandle(PROJECT_DOC_FILE_NAME, { create: true });
   let writable: FileSystemWritableFileStream | null = null;
   try {
     writable = await fileHandle.createWritable();
@@ -269,9 +315,7 @@ export async function writeProject(
     if (writable) {
       try {
         await writable.abort();
-      } catch {
-        // ignore abort error
-      }
+      } catch {}
     }
     throw new Error(`Failed to write project document: ${err instanceof Error ? err.message : String(err)}`);
   }

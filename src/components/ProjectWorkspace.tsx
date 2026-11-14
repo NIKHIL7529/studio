@@ -25,7 +25,7 @@ import {
   importFallbackFiles,
   resolveAssetStatus,
   authorizeAssetAccess,
-  compareRelinkMetadata,
+  compareRelinkWithFingerprint,
   relinkAssetHandle,
   removeAssetReference,
   type RelinkComparison,
@@ -40,6 +40,8 @@ import { TimelineEditor } from "./editor/TimelineEditor.tsx";
 import { TimelinePreview } from "./editor/TimelinePreview.tsx";
 import { ClipInspector } from "./editor/ClipInspector.tsx";
 import { ExportModal } from "./editor/ExportModal.tsx";
+import { ProjectRevisionsModal } from "./ProjectRevisionsModal.tsx";
+import { CacheManagerModal } from "./CacheManagerModal.tsx";
 import {
   Button,
   IconButton,
@@ -97,6 +99,10 @@ export function ProjectWorkspace({
 
   // Export modal state (Phase 5)
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+
+  // Phase 6 modals
+  const [isRevisionsModalOpen, setIsRevisionsModalOpen] = useState(false);
+  const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
 
   // ─── Timeline state ─────────────────────────────────────────────────────────
 
@@ -398,7 +404,7 @@ export function ProjectWorkspace({
 
         const handle = handles[0];
         const file = await handle.getFile();
-        const comparison = compareRelinkMetadata(asset, file);
+        const comparison = await compareRelinkWithFingerprint(asset, file);
 
         if (comparison.match) {
           const updatedAsset = await relinkAssetHandle(asset, handle, file);
@@ -424,7 +430,7 @@ export function ProjectWorkspace({
     const files = e.target.files;
     if (!files || files.length === 0 || !relinkTargetAsset) return;
     const file = files[0];
-    const comparison = compareRelinkMetadata(relinkTargetAsset, file);
+    const comparison = await compareRelinkWithFingerprint(relinkTargetAsset, file);
     setPendingRelinkFile({ file });
     setRelinkComparison(comparison);
     if (relinkFileInputRef.current) relinkFileInputRef.current.value = "";
@@ -584,6 +590,31 @@ export function ProjectWorkspace({
             </div>
           )}
           <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsRevisionsModalOpen(true)}
+            title="Project revisions and snapshots"
+            className="flex items-center gap-1.5"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <span>Revisions</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsCacheModalOpen(true)}
+            title="Inspect and clean workspace cache"
+            className="flex items-center gap-1.5"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+            </svg>
+            <span>Cache</span>
+          </Button>
+          <Button
             variant="primary"
             size="sm"
             onClick={() => setIsExportModalOpen(true)}
@@ -678,6 +709,8 @@ export function ProjectWorkspace({
                 {relinkComparison.nameDiffers && <li>Filename does not match.</li>}
                 {relinkComparison.sizeDiffers && <li>File size differs.</li>}
                 {relinkComparison.dateDiffers && <li>Modification date differs.</li>}
+                {relinkComparison.fingerprintDiffers && <li>Content fingerprint differs from original media.</li>}
+                {relinkComparison.fingerprintMatched && <li className="text-emerald-400">Content fingerprint confirmed identical.</li>}
               </ul>
             </div>
           </div>
@@ -721,6 +754,37 @@ export function ProjectWorkspace({
           } as ProjectDocumentWithTimeline;
           updateProject(updated);
         }}
+        onExportsUpdated={(updatedExports) => {
+          const updated = {
+            ...doc,
+            exports: updatedExports,
+          } as ProjectDocumentWithTimeline;
+          updateProject(updated);
+        }}
+      />
+
+      {/* Project Revisions Modal (Phase 6) */}
+      <ProjectRevisionsModal
+        isOpen={isRevisionsModalOpen}
+        project={doc}
+        workspaceHandle={workspaceHandle}
+        onClose={() => setIsRevisionsModalOpen(false)}
+        onProjectRestored={(restoredDoc) => {
+          const withTimeline = restoredDoc as ProjectDocumentWithTimeline;
+          setDoc(withTimeline);
+          if (withTimeline.timeline) {
+            setTimeline(withTimeline.timeline);
+          }
+          onProjectUpdated(restoredDoc);
+        }}
+      />
+
+      {/* Cache Management Modal (Phase 6) */}
+      <CacheManagerModal
+        isOpen={isCacheModalOpen}
+        workspaceHandle={workspaceHandle}
+        projectId={doc.id}
+        onClose={() => setIsCacheModalOpen(false)}
       />
     </div>
   );

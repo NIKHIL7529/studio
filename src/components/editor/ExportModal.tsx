@@ -31,6 +31,12 @@ import {
 } from "../../lib/export/renderPlan.ts";
 import { detectExportCapabilities } from "../../lib/export/capabilities.ts";
 import { renderAndExport, type ExportPipelineResult } from "../../lib/export/pipeline.ts";
+import {
+  checkExportFileStatus,
+  renameExport,
+  deleteExport,
+  type ExportFileStatus,
+} from "../../lib/export/history.ts";
 import { formatBytes } from "../../lib/projectValidation.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { Button, Modal } from "@/components/ui";
@@ -43,6 +49,7 @@ export interface ExportModalProps {
   workspaceHandle?: FileSystemDirectoryHandle;
   onClose: () => void;
   onExportSuccess: (exportRecord: ProjectExport) => void;
+  onExportsUpdated?: (updatedExports: ProjectExport[]) => void;
 }
 
 type ModalTab = "export" | "history";
@@ -55,6 +62,7 @@ export function ExportModal({
   workspaceHandle,
   onClose,
   onExportSuccess,
+  onExportsUpdated,
 }: ExportModalProps) {
   const [activeTab, setActiveTab] = useState<ModalTab>("export");
 
@@ -271,7 +279,12 @@ export function ExportModal({
         </div>
 
         {activeTab === "history" ? (
-          <ExportHistoryView exports={project.exports || []} />
+          <ExportHistoryView
+            exports={project.exports || []}
+            projectId={project.id}
+            workspaceHandle={workspaceHandle}
+            onExportsUpdated={onExportsUpdated}
+          />
         ) : isExporting || completedResult || exportError ? (
           /* Active Export / Completed / Error View */
           <div className="space-y-4 py-2">
@@ -562,7 +575,124 @@ export function ExportModal({
   );
 }
 
-function ExportHistoryView({ exports }: { exports: ProjectExport[] }) {
+function ExportHistoryView({
+  exports,
+  projectId,
+  workspaceHandle,
+  onExportsUpdated,
+}: {
+  exports: ProjectExport[];
+  projectId: string;
+  workspaceHandle?: FileSystemDirectoryHandle;
+  onExportsUpdated?: (updated: ProjectExport[]) => void;
+}) {
+  const [fileStatuses, setFileStatuses] = useState<Map<string, ExportFileStatus>>(new Map());
+
+  // Rename state
+  const [renamingExport, setRenamingExport] = useState<ProjectExport | null>(null);
+  const [newNameInput, setNewNameInput] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
+
+  // Delete state
+  const [deletingExport, setDeletingExport] = useState<ProjectExport | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Check file presence on disk
+  useEffect(() => {
+    if (!workspaceHandle) return;
+    let isCancelled = false;
+
+    async function check() {
+      const statuses = new Map<string, ExportFileStatus>();
+      for (const exp of exports) {
+        try {
+          const res = await checkExportFileStatus(workspaceHandle!, projectId, exp.name);
+          statuses.set(exp.id, res);
+        } catch {
+          statuses.set(exp.id, { exists: false, error: "Failed to access file" });
+        }
+      }
+      if (!isCancelled) {
+        setFileStatuses(statuses);
+      }
+    }
+
+    void check();
+    return () => {
+      isCancelled = true;
+    };
+  }, [workspaceHandle, projectId, exports]);
+
+  const handleDownload = (exp: ProjectExport) => {
+    const status = fileStatuses.get(exp.id);
+    if (!status?.file) return;
+    const url = URL.createObjectURL(status.file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = exp.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleStartRename = (exp: ProjectExport) => {
+    setRenamingExport(exp);
+    setNewNameInput(exp.name.replace(/\.[^/.]+$/, ""));
+    setRenameError(null);
+  };
+
+  const handleConfirmRename = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!workspaceHandle || !renamingExport || !onExportsUpdated) return;
+
+    setIsRenaming(true);
+    setRenameError(null);
+    try {
+      const { updatedExports } = await renameExport(
+        workspaceHandle,
+        projectId,
+        renamingExport.id,
+        exports,
+        newNameInput
+      );
+      onExportsUpdated(updatedExports);
+      setRenamingExport(null);
+    } catch (err: unknown) {
+      setRenameError(err instanceof Error ? err.message : "Failed to rename export.");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!workspaceHandle || !deletingExport || !onExportsUpdated) return;
+
+    setIsDeleting(true);
+    try {
+      const updated = await deleteExport(
+        workspaceHandle,
+        projectId,
+        deletingExport.id,
+        exports,
+        true
+      );
+      onExportsUpdated(updated);
+      setDeletingExport(null);
+    } catch (err: unknown) {
+      console.warn("Failed to delete export:", err);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleRemoveStaleRecord = (exportId: string) => {
+    if (!onExportsUpdated) return;
+    const updated = exports.filter((e) => e.id !== exportId);
+    onExportsUpdated(updated);
+  };
+
   if (exports.length === 0) {
     return (
       <div className="py-8 text-center text-xs text-cs-text-tertiary">
@@ -572,31 +702,178 @@ function ExportHistoryView({ exports }: { exports: ProjectExport[] }) {
   }
 
   return (
-    <div className="space-y-2 max-h-80 overflow-y-auto">
-      {exports.map((exp) => (
-        <div
-          key={exp.id}
-          className="p-3 rounded border border-cs-border-subtle bg-cs-bg-surface flex items-center justify-between text-xs"
-        >
-          <div className="space-y-0.5">
-            <div className="font-medium text-cs-text font-mono truncate max-w-[280px]">
-              {exp.name}
+    <>
+      <div className="space-y-2 max-h-80 overflow-y-auto">
+        {exports.map((exp) => {
+          const status = fileStatuses.get(exp.id);
+          const isAvailable = status?.exists ?? true;
+
+          return (
+            <div
+              key={exp.id}
+              className="p-3 rounded-lg border border-cs-border-subtle bg-cs-bg-surface flex items-center justify-between text-xs"
+            >
+              <div className="space-y-1 min-w-0 pr-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-cs-text-primary font-mono truncate max-w-[260px]">
+                    {exp.name}
+                  </span>
+                  {isAvailable ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
+                      Available
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-medium">
+                      Missing file
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px] text-cs-text-secondary flex items-center gap-2 flex-wrap">
+                  <span>{exp.width} × {exp.height}</span>
+                  <span>•</span>
+                  <span>{formatDuration(exp.duration)}</span>
+                  <span>•</span>
+                  <span>{formatBytes(exp.fileSize)}</span>
+                  <span>•</span>
+                  <span>{new Date(exp.createdAt).toLocaleDateString()}</span>
+                </div>
+
+                {!isAvailable && (
+                  <p className="text-[10px] text-amber-400 mt-0.5">
+                    File was moved or deleted externally from the exports folder.
+                  </p>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {isAvailable ? (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleDownload(exp)}
+                      title="Download or save video file"
+                    >
+                      Download
+                    </Button>
+                    {workspaceHandle && onExportsUpdated && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleStartRename(exp)}
+                        title="Rename output file"
+                      >
+                        Rename
+                      </Button>
+                    )}
+                    {workspaceHandle && onExportsUpdated && (
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => setDeletingExport(exp)}
+                        title="Delete output file"
+                      >
+                        Delete
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  onExportsUpdated && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleRemoveStaleRecord(exp.id)}
+                      title="Remove missing entry from history"
+                    >
+                      Clear Record
+                    </Button>
+                  )
+                )}
+              </div>
             </div>
-            <div className="text-[11px] text-cs-text-tertiary flex items-center gap-2">
-              <span>{exp.width} × {exp.height}</span>
-              <span>•</span>
-              <span>{formatDuration(exp.duration)}</span>
-              <span>•</span>
-              <span>{formatBytes(exp.fileSize)}</span>
-              <span>•</span>
-              <span>{new Date(exp.createdAt).toLocaleDateString()}</span>
+          );
+        })}
+      </div>
+
+      {/* Rename Output Modal */}
+      <Modal
+        open={renamingExport !== null}
+        onClose={() => setRenamingExport(null)}
+        title="Rename Export Output"
+        description="Rename this output file on disk and in your project export history."
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setRenamingExport(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleConfirmRename}
+              disabled={isRenaming || !newNameInput.trim()}
+            >
+              {isRenaming ? "Renaming…" : "Rename File"}
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={handleConfirmRename} className="space-y-3 text-xs">
+          {renameError && (
+            <div className="p-2.5 rounded bg-cs-error/10 border border-cs-error/20 text-cs-error">
+              {renameError}
+            </div>
+          )}
+          <div>
+            <label className="block text-cs-text-secondary mb-1 font-medium">New Filename</label>
+            <input
+              type="text"
+              value={newNameInput}
+              onChange={(e) => setNewNameInput(e.target.value)}
+              autoFocus
+              className="w-full bg-cs-bg-base border border-cs-border-subtle rounded px-2.5 py-1.5 text-xs text-cs-text-primary font-mono focus:outline-none focus:border-cs-accent"
+            />
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete Output Confirmation Modal */}
+      <Modal
+        open={deletingExport !== null}
+        onClose={() => setDeletingExport(null)}
+        title="Delete Export Output"
+        description="Are you sure you want to delete this finished output from disk?"
+        footer={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setDeletingExport(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting…" : "Delete Output File"}
+            </Button>
+          </>
+        }
+      >
+        {deletingExport && (
+          <div className="space-y-3 text-xs text-cs-text-secondary leading-relaxed">
+            <div className="p-3 rounded bg-cs-bg-surface border border-cs-border-subtle font-mono text-cs-text-primary">
+              {deletingExport.name} ({formatBytes(deletingExport.fileSize)})
+            </div>
+            <div className="p-3 rounded bg-cs-info/10 border border-cs-info/20 text-cs-text-primary space-y-1">
+              <p className="font-semibold text-cs-info">Safety Confirmation</p>
+              <p className="text-[11px] text-cs-text-secondary">
+                This will delete the rendered file from your workspace <code>exports/</code> directory. Your <strong>original source footage</strong> and project timeline will <strong>not</strong> be touched.
+              </p>
             </div>
           </div>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium">
-            Completed
-          </span>
-        </div>
-      ))}
-    </div>
+        )}
+      </Modal>
+    </>
   );
 }

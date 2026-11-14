@@ -54,6 +54,40 @@ export interface ProjectAsset {
    * Contains only stable JSON-serializable values (no live objects or URLs).
    */
   metadata?: InspectedMediaMetadata;
+
+  /**
+   * Optional fast bounded content fingerprint (Phase 6) used to reliably
+   * detect file changes or verify replacement files during relinking.
+   */
+  fingerprint?: string;
+}
+
+/**
+ * Metadata for a saved project document revision (Phase 6).
+ */
+export interface ProjectRevisionMetadata {
+  /** Revision UUID */
+  id: string;
+
+  /** ISO 8601 creation timestamp */
+  createdAt: string;
+
+  /** Human-readable reason or checkpoint description */
+  reason: string;
+
+  /** Document byte size when serialized */
+  byteSize: number;
+
+  /** Number of assets in the revision snapshot */
+  assetCount: number;
+}
+
+/**
+ * Complete revision entry containing metadata and historical project document snapshot.
+ */
+export interface ProjectRevision {
+  metadata: ProjectRevisionMetadata;
+  document: ProjectDocument;
 }
 
 export interface ProjectDocument {
