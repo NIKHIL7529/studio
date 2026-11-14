@@ -244,6 +244,11 @@ export function WorkspaceHome() {
       setPermissionState("checking");
 
       try {
+        if (typeof window !== "undefined" && typeof window.showDirectoryPicker !== "function") {
+          setPermissionState("unsupported");
+          return;
+        }
+
         const storedHandle = await loadWorkspaceHandle();
         if (isCancelled) return;
 
@@ -263,7 +268,7 @@ export function WorkspaceHome() {
       } catch (err) {
         if (isCancelled) return;
         console.warn("Error during workspace initialization:", err);
-        setPermissionState("not-selected");
+        setPermissionState("error");
       }
     }
 
@@ -526,6 +531,68 @@ export function WorkspaceHome() {
                 </Button>
               }
             />
+          </Panel>
+        )}
+
+        {/* ─── State 1b: Browser lacks File System Access API ─────────────── */}
+        {permissionState === "unsupported" && (
+          <Panel as="section" aria-labelledby="workspace-heading">
+            <PanelHeader
+              title="Browser Compatibility Notice"
+              actions={<Badge variant="warning">Unsupported Browser</Badge>}
+            />
+            <div className="p-6 flex flex-col items-center text-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-cs-warning/15 flex items-center justify-center text-cs-warning">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+              </div>
+              <div className="max-w-md">
+                <p className="text-sm font-medium text-cs-text-primary">
+                  Local Workspace Access is not supported in this browser
+                </p>
+                <p className="mt-1 text-xs text-cs-text-secondary leading-relaxed">
+                  Content Studio uses the File System Access API to store project documents and write exports directly to your local computer without uploading files to any server. This API is currently supported in desktop Google Chrome and Microsoft Edge.
+                </p>
+              </div>
+            </div>
+          </Panel>
+        )}
+
+        {/* ─── State 1c: Error accessing workspace handle ─────────────────── */}
+        {permissionState === "error" && (
+          <Panel as="section">
+            <PanelHeader
+              title="Workspace Error"
+              actions={<Badge variant="error">Error</Badge>}
+            />
+            <div className="p-6 flex flex-col items-center text-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-cs-error/15 flex items-center justify-center text-cs-error">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="15" y1="9" x2="9" y2="15" />
+                  <line x1="9" y1="9" x2="15" y2="15" />
+                </svg>
+              </div>
+              <div className="max-w-md">
+                <p className="text-sm font-medium text-cs-text-primary">
+                  Unable to access workspace folder
+                </p>
+                <p className="mt-1 text-xs text-cs-text-secondary leading-relaxed">
+                  An error occurred while accessing the saved workspace directory. The folder may have been moved, renamed, or access was revoked.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 mt-1">
+                <Button variant="primary" size="md" onClick={handleSelectWorkspace}>
+                  Choose workspace folder
+                </Button>
+                <Button variant="ghost" size="md" onClick={handleDisconnectWorkspace}>
+                  Clear stored workspace
+                </Button>
+              </div>
+            </div>
           </Panel>
         )}
 

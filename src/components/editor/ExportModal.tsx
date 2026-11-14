@@ -153,6 +153,14 @@ export function ExportModal({
     return buildRenderPlan(project, timeline, exportSettings, liveAssets);
   }, [project, timeline, exportSettings, liveAssets]);
 
+  // Validate format capability
+  const isSelectedFormatSupported = useMemo(() => {
+    if (!capabilities) return false;
+    if (!capabilities.hasWebCodecs) return false;
+    if (format === "webm") return capabilities.canExportWebmOpus;
+    return capabilities.canExportMp4AvcAac;
+  }, [capabilities, format]);
+
   // Cancellation handler
   const handleCancelExport = useCallback(() => {
     if (abortControllerRef.current) {
@@ -483,8 +491,18 @@ export function ExportModal({
                   onChange={(e) => handleFormatChange(e.target.value as ExportFormat)}
                   className="w-full bg-cs-bg-surface border border-cs-border-subtle rounded px-2.5 py-1.5 text-xs text-cs-text focus:outline-none focus:border-cs-accent"
                 >
-                  <option value="mp4">MP4 (H.264 + AAC) [Recommended]</option>
-                  <option value="webm">WebM (VP9 + Opus)</option>
+                  <option
+                    value="mp4"
+                    disabled={capabilities !== null && !capabilities.canExportMp4AvcAac}
+                  >
+                    MP4 (H.264 + AAC) {capabilities !== null && !capabilities.canExportMp4AvcAac ? "[Unsupported]" : "[Recommended]"}
+                  </option>
+                  <option
+                    value="webm"
+                    disabled={capabilities !== null && !capabilities.canExportWebmOpus}
+                  >
+                    WebM (VP9 + Opus) {capabilities !== null && !capabilities.canExportWebmOpus ? "[Unsupported]" : ""}
+                  </option>
                 </select>
               </div>
 
@@ -528,21 +546,32 @@ export function ExportModal({
                 <div className="text-[11px] text-cs-text-tertiary">
                   Checking browser video encoders...
                 </div>
-              ) : capabilities?.hasWebCodecs ? (
-                <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                  Browser WebCodecs ({format === "webm" ? "VP9/Opus" : "H.264/AAC"}) available
-                </div>
-              ) : (
+              ) : !capabilities?.hasWebCodecs ? (
                 <div className="flex items-center gap-1.5 text-[11px] text-amber-400">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <circle cx="12" cy="12" r="10" />
                     <line x1="12" y1="8" x2="12" y2="12" />
                     <line x1="12" y1="16" x2="12.01" y2="16" />
                   </svg>
-                  WebCodecs encoders not supported in this browser.
+                  WebCodecs encoders not supported in this browser. Desktop Chrome or Edge is required to render.
+                </div>
+              ) : !isSelectedFormatSupported ? (
+                <div className="flex items-center gap-1.5 text-[11px] text-amber-400">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  {format === "webm"
+                    ? "VP9/Opus encoder is not supported in this browser. Try MP4 format."
+                    : "H.264/AAC encoder is not supported in this browser. Try WebM format or use desktop Chrome/Edge."}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-[11px] text-emerald-400">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  Browser WebCodecs ({format === "webm" ? "VP9/Opus" : "H.264/AAC"}) available
                 </div>
               )}
 
@@ -563,7 +592,7 @@ export function ExportModal({
                 variant="primary"
                 size="sm"
                 onClick={handleStartExport}
-                disabled={!plan.isValid || checkingCaps}
+                disabled={!plan.isValid || checkingCaps || !isSelectedFormatSupported}
               >
                 Start Export
               </Button>

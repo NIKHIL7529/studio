@@ -109,6 +109,22 @@ describe("Repurpose Candidate Window Discovery & Boundary Snapping", () => {
 });
 
 describe("Repurpose Deterministic Scoring & Objective Weighting", () => {
+  test("calculateDurationFit evaluates duration against objective bounds", () => {
+    // Within range
+    const fitInside = calculateDurationFit(15, 10, 30, "highlights");
+    assert.ok(fitInside >= 50 && fitInside <= 100);
+
+    // Below minimum
+    const fitBelow = calculateDurationFit(5, 10, 30, "highlights");
+    assert.ok(fitBelow < fitInside);
+    assert.ok(fitBelow >= 10);
+
+    // Above maximum
+    const fitAbove = calculateDurationFit(45, 10, 30, "highlights");
+    assert.ok(fitAbove < fitInside);
+    assert.ok(fitAbove >= 10);
+  });
+
   test("scoreAndRankCandidates normalizes scores strictly to [0, 100]", () => {
     const analysis = createMockAnalysisResult();
     const config: RepurposeConfig = {

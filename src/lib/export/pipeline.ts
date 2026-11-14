@@ -353,6 +353,18 @@ export async function renderAndExport(
       await writer.abort();
     } catch {}
 
+    if (canvasSource) {
+      try {
+        canvasSource.close();
+      } catch {}
+    }
+
+    if (audioSource) {
+      try {
+        audioSource.close();
+      } catch {}
+    }
+
     if (output && output.state !== "finalized") {
       try {
         output.cancel();

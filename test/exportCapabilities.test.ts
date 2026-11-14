@@ -107,6 +107,33 @@ describe("Export Capability Detection", () => {
     }
   });
 
+  test("correctly reports canExportWebmOpus when VP9 and Opus are supported but H264 is not", async () => {
+    const origVE = (globalThis as unknown as Record<string, unknown>)["VideoEncoder"];
+    const origAE = (globalThis as unknown as Record<string, unknown>)["AudioEncoder"];
+
+    try {
+      (globalThis as unknown as Record<string, unknown>)["VideoEncoder"] = function () {};
+      ((globalThis as unknown as Record<string, unknown>)["VideoEncoder"] as unknown as Record<string, unknown>).isConfigSupported =
+        async (c: { codec: string }) => ({ supported: c.codec.startsWith("vp") });
+
+      (globalThis as unknown as Record<string, unknown>)["AudioEncoder"] = function () {};
+      ((globalThis as unknown as Record<string, unknown>)["AudioEncoder"] as unknown as Record<string, unknown>).isConfigSupported =
+        async (c: { codec: string }) => ({ supported: c.codec === "opus" });
+
+      const report = await detectExportCapabilities();
+      assert.equal(report.hasWebCodecs, true);
+      assert.equal(report.canExportMp4AvcAac, false);
+      assert.equal(report.canExportWebmOpus, true);
+      assert.ok(report.notes.some((n) => n.includes("H.264")));
+    } finally {
+      if (origVE) (globalThis as unknown as Record<string, unknown>)["VideoEncoder"] = origVE;
+      else delete (globalThis as unknown as Record<string, unknown>)["VideoEncoder"];
+
+      if (origAE) (globalThis as unknown as Record<string, unknown>)["AudioEncoder"] = origAE;
+      else delete (globalThis as unknown as Record<string, unknown>)["AudioEncoder"];
+    }
+  });
+
   test("safely catches errors thrown by isConfigSupported", async () => {
     const origVE = (globalThis as unknown as Record<string, unknown>)["VideoEncoder"];
 

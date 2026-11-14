@@ -115,6 +115,11 @@ export async function createWorkspaceProgressiveWriter(
   const tempFilename = `.tmp_${crypto.randomUUID().slice(0, 8)}_${finalFilename}`;
   const tempFileHandle = await exportsDir.getFileHandle(tempFilename, { create: true });
 
+  if (typeof tempFileHandle.createWritable !== "function") {
+    // If the browser does not support writable file streams on handles, fall back to memory writer
+    return createMemoryFallbackWriter(preferredFilename);
+  }
+
   const writable = await tempFileHandle.createWritable();
   const target = new StreamTarget(writable as unknown as WritableStream);
 

@@ -1,219 +1,183 @@
 # Content Studio
 
-A browser-based, local-first video editor and repurposing workspace.
+A browser-based, local-first video editor and deterministic repurposing workspace.
 
-> **Phase 6 — Project revisions, export history, workspace trash, and cache lifecycle.**  
-> This release implements durable project persistence, recoverable project revisions/checkpoints, generation and export output management, conservative cache inventory and safe cleanup, workspace trash for project recovery, and bounded media fingerprinting for reliable source relinking.
-
----
-
-## What is Content Studio?
-
-Content Studio lets you import your own videos, arrange clips on a timeline, add text overlays and export finished content — entirely in your browser, without uploading anything, creating an account or installing desktop software.
-
-**Core principles:**
-
-- **Local-first.** Your source videos, project data and exports stay on your computer. Nothing is uploaded.
-- **Browser-native.** Processing uses WebCodecs, Web Workers, Mediabunny, Canvas and File System Access APIs. No FFmpeg or FFmpeg.wasm required.
-- **No account.** Open the site and start working. No sign-up, subscription or cloud dependency.
-- **Open source.** An independent project with minimal dependencies and no proprietary infrastructure.
+> **Release-Readiness Phase**  
+> Complete local-first, browser-native video editing and deterministic repurposing workspace. Hardened across application startup, browser capability preflight, durable workspace persistence, source relinking, multi-track timeline editing, audio/text overlays, progressive streaming export, project revisions, workspace trash, and conservative cache lifecycle management.
 
 ---
 
-## Current state (Phase 5)
+## 1. What is Content Studio?
 
-| Area | Status |
-|---|---|
-| Application shell and navigation | ✅ Implemented (Phase 1) |
-| Design system and UI components | ✅ Implemented (Phase 1) |
-| Home / workspace entry screen | ✅ Implemented (Phase 1) |
-| Browser capability detection | ✅ Implemented (Phase 1) |
-| Workspace folder selection & persistence | ✅ Implemented (Phase 2) |
-| Project creation, list, rename & deletion | ✅ Implemented (Phase 2) |
-| Source file references & media library | ✅ Implemented (Phase 2) |
-| Re-authorization & missing-file relinking | ✅ Implemented (Phase 2) |
-| Autosave & write-failure recovery | ✅ Implemented (Phase 2) |
-| Local media inspection via Mediabunny | ✅ Implemented (Phase 3) |
-| Native video & audio preview and seek scrubbing | ✅ Implemented (Phase 3) |
-| WebCodecs runtime capability checks & fallback | ✅ Implemented (Phase 3) |
-| Resource cleanup & object URL lifecycle | ✅ Implemented (Phase 3) |
-| Multi-track timeline, trimming, snapping & undo/redo | ✅ Implemented (Phase 4) |
-| Text overlays and styled captions | ✅ Implemented (Phase 4) |
-| Deterministic render-plan generation | ✅ Implemented (Phase 5) |
-| Capability preflight & runtime encoder verification | ✅ Implemented (Phase 5) |
-| Local rendering pipeline (Mediabunny + WebCodecs) | ✅ Implemented (Phase 5) |
-| Progressive disk streaming to workspace | ✅ Implemented (Phase 5) |
-| Local output validation & smoke testing | ✅ Implemented (Phase 5) |
-| Export history persistence & cancellation safeguards | ✅ Implemented (Phase 5) |
-| Project revisions, checkpoints & non-destructive restore | ✅ Implemented (Phase 6) |
-| Generation & export output management (download, rename, delete) | ✅ Implemented (Phase 6) |
-| Cache inventory, resource locking & safe dry-run cleanup | ✅ Implemented (Phase 6) |
-| Workspace trash & reversible project deletion | ✅ Implemented (Phase 6) |
-| Bounded media fingerprinting & verified relinking | ✅ Implemented (Phase 6) |
+Content Studio lets creators import their own videos, organize multi-track timelines, trim and split clips, configure aspect ratios, overlay styled captions, and export completed videos — entirely in desktop web browsers, without uploading files to external servers, creating accounts, or installing desktop companion software.
+
+### Core Principles
+- **Local-first architecture:** Original source videos, project documents, edit decisions, revisions, and exported files remain entirely on the user's computer. No source video is ever uploaded.
+- **Browser-native media engine:** Video decoding, audio mixing, frame compositing, and container multiplexing use WebCodecs, Mediabunny, Web Workers, HTMLMediaElement, and the File System Access API. No FFmpeg, FFmpeg.wasm, or native binaries are required.
+- **Privacy-first & offline-ready:** Works without user authentication, databases, cloud storage, or external APIs. Zero network requests occur during normal editing and export.
+- **Deterministic editing & repurposing:** Automated moment discovery and candidate scoring are 100% deterministic, transparent local algorithms based on visual dynamics, audio energy, and natural boundaries. No AI, LLMs, or cloud transcription services are included in this release.
 
 ---
 
-## Phase 6 Project Revisions, Cache Lifecycle & Safe Storage
+## 2. Implemented Capabilities Baseline
 
-### 1. Recoverable Project Revisions & Checkpoints
-- Project revisions are stored in `projects/<id>/revisions/revision-<timestamp>-<id>.json`.
-- **Automatic duplicate suppression:** Before saving a new snapshot, the state is compared canonically with the latest revision (excluding volatile timestamps like `updatedAt`); identical documents do not create redundant revisions.
-- **Pre-restore safety checkpoint:** Restoring an older revision automatically creates a snapshot of the current state before replacing it, guaranteeing zero data loss.
-- **Export preservation:** When an earlier revision is restored, completed export records are merged from the current document so that finished renders produced after the snapshot was created are never lost.
-- **Bounded retention:** Keeps the 50 most recent revisions per project to prevent unbounded growth.
-
-### 2. Generation & Export Output Management
-- Completed exports are tracked with their full render settings, duration, resolution, profile, and timestamps.
-- **Status verification:** Checks on-disk file presence via the File System Access API and flags deleted/moved files with a clear "Missing File" badge rather than silently removing the history entry.
-- **Safe output management:** Users can download/reveal, rename (without changing output format), or delete application-managed export files directly.
-- **Original source isolation:** Deleting an export file operates strictly on the output file inside `projects/<id>/exports/`; original source files remain completely untouched.
-
-### 3. Local Cache Inventory & Safe Lifecycle
-- Distinguishes five storage categories:
-  1. *Original source media* (user-owned, never touched).
-  2. *Project documents and revisions* (durable user data, never treated as cache).
-  3. *Completed exports* (durable user outputs, never treated as cache).
-  4. *Regenerable derived assets* (thumbnails, waveforms, preview proxies inside project cache).
-  5. *Temporary processing files* (abandoned `.tmp_*` files, interrupted render chunks).
-- **In-use resource locking:** Active playback, preview rendering, and export pipelines acquire locks (`lockCacheResource`) so in-flight tasks cannot have their cache or staging files pruned.
-- **Safe cleanup & dry-run:** Scans only application-managed cache directories (`projects/<id>/cache/`, root `.cache/`, and `.tmp_*` temporary files). Provides a dry-run preview reporting reclaimable space before user confirms deletion.
-- **Non-destructive:** Unknown files, user documents, and external files are strictly ignored.
-
-### 4. Workspace Trash Model
-- Deleting a project moves its directory from `projects/<id>` to `trash/<id>` with deleted timestamp metadata (`trashedAt`).
-- **Reversible deletion:** Trashed projects can be browsed and restored back to active projects at any time.
-- **Permanent deletion:** Requires explicit user confirmation; only deletes Content Studio's application-managed folder for that project.
-- **Zero source impact:** Moving to trash or permanently deleting a project never deletes original source media referenced by that project.
-
-### 5. Media Fingerprinting & Relinking Verification
-- Uses a fast, non-blocking SHA-256 fingerprint computed across the file size, last modified time, and 128 KB head and tail chunks (`src/lib/media/fingerprint.ts`).
-- Avoids hashing entire multi-gigabyte video files while providing strong resistance against accidental file mismatches.
-- During relinking of missing media, fingerprints and file metrics (duration, dimensions, file size) are validated. If a mismatch is detected, the user is warned with specific differences before accepting the relink.
-
-### 6. Strict Storage Boundaries
-- Workspace folder selected by the user is the sole durable source of truth.
-- OPFS and IndexedDB are strictly bounded to metadata, transient locks, and disposable buffers; video media is never duplicated into OPFS or IndexedDB.
+| Area | Status | Implementation Details |
+|---|---|---|
+| **Startup & Capability Preflight** | ✅ Implemented | Non-intrusive runtime checks for File System Access, WebCodecs, Web Workers, Web Audio, IndexedDB, OffscreenCanvas, and WebGPU. Clear separation between core requirements and optional performance enhancements. |
+| **Workspace & Permissions** | ✅ Implemented | User-selected local folder via File System Access API. Handles stored in IndexedDB with re-authorization state machine (`not-selected`, `checking`, `granted`, `prompt-required`, `denied`, `unsupported`, `error`). |
+| **Project Lifecycle** | ✅ Implemented | Safe creation, UUID-isolated storage (`projects/<id>/project.json`), renaming, listing with corruption resilience, deletion, and reversible trash recovery. |
+| **Source Media References** | ✅ Implemented | Zero-copy referencing: handles stored in IndexedDB, referenced via opaque UUIDs. Original files are never duplicated into workspace, OPFS, or IndexedDB. |
+| **Media Relinking & Fingerprints** | ✅ Implemented | Missing/offline source detection, bounded SHA-256 head/tail fingerprinting, metadata change warnings, and automated re-inspection upon relinking. |
+| **Media Inspection & Preview** | ✅ Implemented | Mediabunny stream inspection (container, tracks, dimensions, duration, orientation, CFR/VFR detection) and HTMLMediaElement native preview playback with strict object URL revocation. |
+| **Multi-track Timeline Editor** | ✅ Implemented | Multi-track video and audio tracks, clip trimming (`sourceIn`/`sourceOut`), split at playhead (`S`), clip drag-and-drop, magnet snapping, zoom (20–500 px/s), and bounded undo/redo (50 states). |
+| **Text & Caption Overlays** | ✅ Implemented | Positionable, styled text overlays with proportional canvas rendering and preview parity. |
+| **Local Rendering Pipeline** | ✅ Implemented | Pure integer microsecond render planning, frame-by-frame canvas compositing, 1-second bounded chunk audio mixing, backpressure-controlled WebCodecs encoding, and staged progressive writing. |
+| **Export Formats & Validation** | ✅ Implemented | MP4 (H.264 + AAC) default, WebM (VP9 + Opus) supported fallback. Post-render Mediabunny container and track validation. Safe cancellation cleans temporary files. |
+| **Revisions & Output History** | ✅ Implemented | Bounded project snapshots (50 revisions), pre-restore safety checkpoints, export history persistence, and disk status verification. |
+| **Cache & Trash Management** | ✅ Implemented | Categorized cache inventory, active resource locking, safe dry-run cleanup, and reversible project trash. |
+| **Deterministic Repurposing** | ✅ Implemented | Local visual dynamics and audio signal analysis, candidate moment scoring, objective weighting (`highlights`, `educational`, `podcast`), sequence selection, and automated edit plan generation. |
 
 ---
 
-## Phase 5 Local Rendering & Export Architecture
+## 3. Supported Browsers and System Requirements
 
-### 1. Deterministic Render Planning
-- Pure function `buildRenderPlan()` creates an immutable execution snapshot from the timeline and project document.
-- Uses integer microsecond arithmetic (`BigInt`) to prevent cumulative floating-point timing drift.
-- Resolves top-to-bottom video track stacking, clip boundary trimming (`sourceIn`/`sourceOut`), timeline gaps (blank frames), audio volume/mute mixing, and text overlay styling/positioning.
-- Pre-export validation checks that all referenced media sources exist, are accessible, and have valid handles before rendering begins.
+### Recommended & Tested Baseline
+- **Google Chrome** (version 120+ on desktop: Windows, macOS, Linux).
+- **Microsoft Edge** (version 120+ on desktop: Windows, macOS, Linux).
 
-### 2. Runtime Capability Preflight
-- Uses `VideoEncoder.isConfigSupported()` and `AudioEncoder.isConfigSupported()` with exact codec parameters (`avc1.640028`, `mp4a.40.2`, `vp09.00.10.08`, `opus`).
-- Does not guess or rely on user-agent sniffing.
-- Default profile: **MP4 with H.264 video and AAC audio**. Supported fallback: **WebM with VP9 and Opus audio**.
-- If a browser or hardware configuration cannot encode the requested settings, clear explanations are provided and the project remains intact.
+### Browser Compatibility Matrix
 
-### 3. Progressive Disk Writing
-- `WorkspaceProgressiveWriter` writes chunks directly to `projects/<id>/exports/.tmp_<id>_<timestamp>_<name>` using `FileSystemWritableFileStream` and Mediabunny `StreamTarget`.
-- Bounded memory usage: never buffers entire rendered videos in JavaScript memory.
-- Safe staging: atomic promotion to the final destination upon successful completion and validation; immediate cleanup of incomplete files on abort or error.
-- Non-destructive naming: automatically avoids overwriting existing exports by generating collision-free names (e.g., `video (1).mp4`).
-- Memory fallback mode (capped at 500 MB) for environments where the File System Access API writable streams are unavailable.
+| Capability | Chrome / Edge (Desktop) | Firefox (Desktop) | Safari (macOS) | Mobile Browsers |
+|---|---|---|---|---|
+| **File System Access API (showDirectoryPicker)** | ✅ Full Support | ❌ Not Supported | ❌ Not Supported | ❌ Not Supported |
+| **WebCodecs (VideoEncoder / AudioEncoder)** | ✅ Full Support | ⚠️ Partial / Flag | ⚠️ Partial / Flag | ⚠️ Inconsistent |
+| **Writable File Streams on Handles** | ✅ Full Support | ❌ Not Supported | ❌ Not Supported | ❌ Not Supported |
+| **Web Workers & OffscreenCanvas** | ✅ Full Support | ⚠️ Partial | ⚠️ Partial | ⚠️ Memory Limited |
+| **Overall Status** | **Supported** | **Unsupported** | **Unsupported** | **Unsupported** |
 
-### 4. Output Validation & Verification
-- After writing is finalized, the resulting file is inspected locally using Mediabunny:
-  - Container readability and non-zero file size.
-  - Presence of expected video and audio tracks.
-  - Codec verification (e.g. `avc` for MP4, `vp9` for WebM).
-  - Dimension matching (within ±4px macroblock tolerance).
-  - Duration verification (within ±0.5s tolerance).
-  - Browser `<video>` element metadata smoke test.
-
-### 5. Export History & Persistence
-- Validated exports are registered in `project.json` under `exports: ProjectExport[]`, keeping `schemaVersion: 1` backwards compatibility.
-- Users can view and download previous exports directly from the Export modal.
+> [!IMPORTANT]
+> **Why Firefox and Safari are currently unsupported:**  
+> Neither Mozilla Firefox nor Apple Safari supports the File System Access API directory picker (`showDirectoryPicker`) and direct file stream writing (`FileSystemWritableFileStream`). Without these, persistent local workspaces cannot be opened or written directly to disk. Content Studio requires desktop Chrome or Edge for the release baseline. If accessed in Firefox or Safari, the application displays a clear compatibility notice.
 
 ---
 
-## Phase 3 Media Architecture
+## 4. Getting Started Locally
 
-### Role of Mediabunny
-[Mediabunny](https://mediabunny.dev/) (v1.66) is integrated as a local-first media parsing engine:
-- Reads directly from local `File` / `Blob` sources via `BlobSource` with bounded internal buffering (8 MiB default).
-- Never reads whole files into memory or converts them into `ArrayBuffer` / base64 strings.
-- Inspects container formats, MIME types, duration, video tracks (coded & display dimensions, orientation, codecs, frame rate metrics), and audio tracks (channels, sample rate, codecs).
-- Fully disposes parser instances (`input.dispose()`) immediately after inspection.
+### Prerequisites
+- [Node.js](https://nodejs.org) (v20.x or v24.x LTS recommended).
 
-### Native Preview & Playback
-- Local playback uses the browser's native `HTMLMediaElement` (`<video>` / `<audio>`) with object URLs created by `URL.createObjectURL()`.
-- Supports play/pause, accurate seek scrubbing, duration, and volume/mute controls.
-- Handles browser autoplay policy gracefully without throwing unhandled rejections.
-- Object URLs are tracked by `ObjectUrlManager` and revoked immediately upon media replacement, project switching, or component unmount.
-
-### WebCodecs Integration Boundary
-- WebCodecs is treated as an optional capability. Basic native preview and container inspection function seamlessly even when WebCodecs is unavailable.
-- `detectWebCodecsCapabilities()` inspects `VideoDecoder`, `VideoEncoder`, `AudioDecoder`, and `AudioEncoder` independently.
-- `checkAssetDecoderSupport()` calls `isConfigSupported()` with concrete codec parameters to check hardware/software decoder support for inspected media.
-
-### Storage & Security
-- Original media files stay untouched at their original paths on disk.
-- Only stable, serializable metadata is stored in `projects/<id>/project.json`.
-- Missing or moved files are flagged with an explicit relinking workflow; relinking clears old metadata and triggers automatic re-inspection.
-
-### Media Formats & Tested Capabilities
-- **Verified via automated tests:** WAVE (.wav with PCM audio), 0-byte/empty files, corrupt/unsupported non-media data, and WebCodecs capability detection.
-- **Inspected via Mediabunny:** MP4, MOV, WebM, MKV, WAVE, MP3, AAC/ADTS, OGG, FLAC.
-- **Known unverified formats on all devices:** High-profile HEVC/H.265 (hardware decoder dependent), AV1 on older machines, ProRes, and multi-track Dolby Vision HDR profiles.
-
----
-
-## Getting started
-
-Requires [Node.js](https://nodejs.org) (v20 or later recommended).
-
+### Installation & Scripts
 ```bash
-# Start the development server
+# Clone the repository
+git clone https://github.com/<owner>/studio.git
+cd studio
+
+# Install dependencies using the repository lockfile
+npm install
+
+# Run the development server
 npm run dev
 
-# Run unit tests
+# Run all unit, integration, and media matrix tests
 npm test
 
-# Production build
-npm run build
+# Run TypeScript typechecking without emitting files
+npm run typecheck
 
-# Type checking
-npx tsc --noEmit
-
-# Lint
+# Run ESLint across source and test files
 npm run lint
+
+# Create an optimized production build
+npm run build
 ```
 
 ---
 
-## Targeted browser capabilities
+## 5. Local Workspace & Storage Architecture
 
-Content Studio currently targets **Chrome and Edge on desktop** (current stable versions).
+### Workspace Directory Layout
+When you select a local workspace directory, Content Studio operates strictly within its designated application folders:
 
-The following APIs are used or detected at runtime:
+```
+<Workspace Folder>/
+├── projects/
+│   └── <project-uuid>/
+│       ├── project.json              # Canonical project document (Schema 1)
+│       ├── revisions/                # Bounded snapshot checkpoints
+│       │   └── revision-<timestamp>-<id>.json
+│       ├── exports/                  # Completed and staged exports
+│       │   ├── interview-1080p.mp4
+│       │   └── .tmp_<id>_<name>.mp4  # Temporary in-flight render staging
+│       └── cache/                    # Disposable project-specific cache
+├── trash/                            # Soft-deleted projects (reversible)
+│   └── <project-uuid>/
+└── .cache/                           # Workspace-level transient cache
+```
 
-| API | Purpose | Required |
-|---|---|---|
-| File System Access API | Workspace folder selection | Yes |
-| WebCodecs | Video / audio decoding and encoding | Yes |
-| Web Workers | Background media processing | Yes |
-| Web Audio API | Audio analysis | Yes |
-| IndexedDB | Persistent metadata storage | Yes |
-| OffscreenCanvas | Off-thread frame rendering | Optional |
-| Origin Private File System | Temporary cache storage | Optional |
-| WebGPU | GPU-accelerated compositing | Optional |
-
-The application includes a browser compatibility panel that checks and explains these capabilities at runtime. It does not assume any codec is available based solely on API presence — detailed codec support is verified in the media engine phase.
+### Storage Principles
+1. **Original source media:** Files remain untouched at their original paths on your computer. Content Studio persists browser filesystem references in IndexedDB; original media bytes are never copied into the workspace, OPFS, or IndexedDB.
+2. **Project data:** `project.json` is the sole durable source of truth for your edits, tracks, clips, overlays, and export history.
+3. **Reversible trash:** Moving a project to trash moves `projects/<id>` into `trash/<id>`. Trashed projects can be inspected and restored to active projects at any time.
+4. **Conservative cache cleanup:** The built-in Cache Manager catalogs only application-generated derived files (`.tmp_*`, thumbnails, waveforms, candidate cache). Durable project documents, completed exports, and original media are strictly protected and can never be deleted by cache cleanup.
+5. **In-use resource locking:** Active playback, preview rendering, and ongoing exports hold resource locks preventing background cache cleanup from pruning active files.
 
 ---
 
-## Product and engineering guidance
+## 6. Supported Media Formats & Codec Profiles
 
-The full product specification and engineering guidelines are in [`AGENTS.md`](./AGENTS.md). That document is the authoritative source; this README describes the current implementation state only.
+### Supported Input Containers & Codecs
+- **Containers:** MP4, MOV, WebM, MKV, WAV, MP3, AAC/ADTS, OGG, FLAC.
+- **Video Decoders:** H.264 (AVC), VP8, VP9, AV1 (subject to local browser/GPU support).
+- **Audio Decoders:** AAC, Opus, MP3, Vorbis, FLAC, PCM Linear Audio.
+- **Inspection capabilities:** Dimensions, display aspect ratios, rotation metadata (90°, 180°, 270° phone footage), variable-frame-rate detection (VFR content is never forced to an invented fixed rate), and channel counts.
+
+### Supported Output Export Profiles
+- **Aspect Ratios:** 16:9 (Landscape), 9:16 (Vertical / Shorts / Reels), 1:1 (Square), 4:5 (Portrait).
+- **Resolution Presets:** 1080p (Full HD), 720p (HD), 540p (SD).
+- **Frame Rates:** 30 fps (Standard), 60 fps (Smooth).
+- **Default Format:** MP4 container with H.264 (`avc1.640028` / `avc1.4d002a`) video and AAC-LC (`mp4a.40.2`) audio at 48 kHz stereo.
+- **Alternative Format:** WebM container with VP9 (`vp09.00.10.08`) video and Opus audio at 48 kHz stereo.
+- **Output Streaming:** Uses `WorkspaceProgressiveWriter` for chunk-based streaming directly to the workspace folder. If handle writable streams are unavailable, falls back to a memory-buffered writer with direct browser file download.
 
 ---
 
-## Licence
+## 7. Performance & Resource Boundaries
 
-Licence to be confirmed before public release. MIT or Apache 2.0 are the likely choices for original code. Third-party dependency licences are listed in `node_modules` per package.
+- **Streaming Input Access:** Media inspection and playback utilize browser `BlobSource` ranged reads. Complete multi-gigabyte video files are never loaded entirely into JavaScript RAM.
+- **Frame & Encoder Resource Cleanup:** Every created `VideoFrame`, `AudioBuffer`, `CanvasSink`, `CanvasSource`, and `Input` instance is explicitly closed and disposed on completion, error, and cancellation.
+- **Bounded Concurrency:** Worker concurrency and media inspection queues are bounded to prevent CPU thread starvation.
+- **Autosave Queue:** Project saves are debounced and queued (`ProjectSaveQueue`), ensuring atomic writes and preventing race conditions during rapid timeline editing.
+
+---
+
+## 8. Security & Privacy Review
+
+- **Zero Network Transmission:** Content Studio does not make any network requests during application use. No telemetry, analytics, remote error reporting, external fonts, or cloud media services are loaded.
+- **No API Keys or Secrets:** The frontend bundle contains zero third-party API keys or remote service credentials.
+- **Isolated Filesystem Permissions:** Directory and file permissions are scoped strictly to the workspace folder and media files explicitly chosen by the user through browser permission dialogs.
+- **Sanitized Paths:** File paths, filenames, and project document IDs are strictly validated to prevent directory traversal (`..`) or invalid characters.
+
+---
+
+## 9. Third-Party Notices & Licenses
+
+Content Studio is licensed as open-source software. All third-party libraries and their licenses are documented in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md):
+- **Mediabunny** — MPL-2.0
+- **Next.js** — MIT License
+- **React & React DOM** — MIT License
+- **Tailwind CSS** — MIT License
+- **TypeScript** — Apache-2.0
+- **ESLint** — MIT License
+
+---
+
+## 10. Product Guidance & Future Scope
+
+The comprehensive product definition and engineering principles are maintained in [`AGENTS.md`](./AGENTS.md).
+
+### Explicitly Excluded from This Release (Future Scope Only)
+- External AI APIs and LLM-assisted editing.
+- Cloud transcription and automatic speech-to-text.
+- Remote cloud rendering, backend servers, and databases.
+- User accounts, authentication, billing, or subscription systems.
+- Native FFmpeg dependencies or desktop executables.
