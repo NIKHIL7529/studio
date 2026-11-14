@@ -337,6 +337,62 @@ function OverlayPanel({
         </div>
       </div>
 
+      {/* Overlay Type & Presets */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Overlay Type</SectionLabel>
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => patch({ overlayType: "title" })}
+            className={`flex-1 h-7 rounded text-xs transition-colors font-medium ${
+              overlay.overlayType !== "caption"
+                ? "bg-cs-accent text-white"
+                : "bg-cs-bg-elevated text-cs-text-secondary hover:bg-cs-bg-hover border border-cs-border-default"
+            }`}
+          >
+            Title
+          </button>
+          <button
+            onClick={() => patch({ overlayType: "caption", preset: overlay.preset || "clean" })}
+            className={`flex-1 h-7 rounded text-xs transition-colors font-medium ${
+              overlay.overlayType === "caption"
+                ? "bg-cs-accent text-white"
+                : "bg-cs-bg-elevated text-cs-text-secondary hover:bg-cs-bg-hover border border-cs-border-default"
+            }`}
+          >
+            Caption
+          </button>
+        </div>
+
+        {overlay.overlayType === "caption" && (
+          <div className="flex flex-col gap-1 mt-1">
+            <label className="text-[10px] text-cs-text-tertiary uppercase tracking-wider font-semibold">Preset</label>
+            <div className="flex gap-1">
+              {(["clean", "bold", "minimal"] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => {
+                    if (p === "bold") {
+                      patch({ preset: p, backgroundColor: "rgba(0, 0, 0, 0.8)", strokeColor: undefined, strokeWidth: 0 });
+                    } else if (p === "minimal") {
+                      patch({ preset: p, backgroundColor: undefined, strokeColor: "#000000", strokeWidth: 2 });
+                    } else {
+                      patch({ preset: p, backgroundColor: "rgba(0, 0, 0, 0.72)", strokeColor: "#000000", strokeWidth: 1 });
+                    }
+                  }}
+                  className={`flex-1 h-6 rounded text-[11px] transition-colors capitalize ${
+                    overlay.preset === p || (!overlay.preset && p === "clean")
+                      ? "bg-cs-primary text-white font-semibold"
+                      : "bg-cs-bg-base text-cs-text-secondary border border-cs-border-default"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Style */}
       <div className="flex flex-col gap-2">
         <SectionLabel>Style</SectionLabel>

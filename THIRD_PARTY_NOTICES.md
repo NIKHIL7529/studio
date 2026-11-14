@@ -27,6 +27,12 @@ Content Studio relies on open-source dependencies. Below is an inventory of pack
 - **Copyright:** (c) Meta Platforms, Inc. and affiliates.
 - **Usage:** User interface component library and DOM reconciliation.
 
+### Browser-Whisper & Transformers.js
+- **Packages:** `browser-whisper` (`2.0.0`), `@huggingface/transformers` (`4.3.1`)
+- **License:** MIT License / Apache License 2.0
+- **Repository:** https://github.com/josephrocca/browser-whisper
+- **Usage:** Browser-local offline speech-to-text recognition via WebGPU and WebAssembly. Audio never leaves the user's computer. Model weights are cached locally in browser OPFS/CacheStorage after explicit user authorization.
+
 ---
 
 ## Development Dependencies
@@ -61,4 +67,4 @@ Content Studio relies on open-source dependencies. Below is an inventory of pack
 
 ## Intellectual Property & Architectural References
 
-As described in `AGENTS.md`, Content Studio is an independent open-source project. Ideas and patterns from established browser-based video editors (including FreeCut, Remotion, and OpenCut) serve as learning references for browser media pipelines and UX paradigms. No proprietary code, trademarks, or copyrighted assets have been copied.
+As described in `AGENTS.md`, Content Studio is an independent open-source project. Ideas and patterns from established browser-based video editors serve as learning references for browser media pipelines and UX paradigms. No proprietary code, trademarks, or copyrighted assets have been copied.

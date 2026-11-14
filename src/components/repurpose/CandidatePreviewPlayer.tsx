@@ -131,8 +131,11 @@ function CandidateActivePlayer({
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-cs-bg-base border-b border-cs-border-subtle">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full bg-cs-primary animate-pulse" />
+          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-cs-primary/10 text-cs-primary">
+            Candidate Preview
+          </span>
           <span className="font-medium text-xs text-cs-text-primary truncate">
-            Preview: {candidate.sourceAssetName}
+            {candidate.sourceAssetName}
           </span>
           <span className="font-mono text-[11px] text-cs-text-secondary">
             {formatDuration(candidate.sourceIn)} – {formatDuration(candidate.sourceOut)}

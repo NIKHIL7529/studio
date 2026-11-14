@@ -233,6 +233,8 @@ export function ExportModal({
     }
   };
 
+  const [previewFile, setPreviewFile] = useState<{ file: File; name: string } | null>(null);
+
   // Direct browser file download fallback
   const handleDownloadFile = () => {
     if (!completedResult?.file) return;
@@ -249,13 +251,14 @@ export function ExportModal({
   if (!isOpen) return null;
 
   return (
-    <Modal
-      open={isOpen}
-      onClose={() => {
-        if (!isExporting) onClose();
-      }}
-      title="Export Video"
-    >
+    <>
+      <Modal
+        open={isOpen}
+        onClose={() => {
+          if (!isExporting) onClose();
+        }}
+        title="Export Video"
+      >
       <div className="space-y-4">
         {/* Navigation tabs */}
         <div className="flex border-b border-cs-border-subtle gap-4 text-xs font-medium">
@@ -292,6 +295,7 @@ export function ExportModal({
             projectId={project.id}
             workspaceHandle={workspaceHandle}
             onExportsUpdated={onExportsUpdated}
+            onPreview={(file, name) => setPreviewFile({ file, name })}
           />
         ) : isExporting || completedResult || exportError ? (
           /* Active Export / Completed / Error View */
@@ -373,11 +377,27 @@ export function ExportModal({
                 </p>
 
                 <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() =>
+                      setPreviewFile({
+                        file: completedResult.file,
+                        name: completedResult.finalFilename,
+                      })
+                    }
+                    className="flex items-center gap-1.5"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                    Preview Final Video
+                  </Button>
                   <Button variant="secondary" size="sm" onClick={handleDownloadFile}>
                     Download to Computer
                   </Button>
                   <Button
-                    variant="primary"
+                    variant="secondary"
                     size="sm"
                     onClick={() => {
                       setCompletedResult(null);
@@ -601,6 +621,14 @@ export function ExportModal({
         )}
       </div>
     </Modal>
+      {previewFile && (
+        <RenderedVideoModal
+          file={previewFile.file}
+          filename={previewFile.name}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -609,11 +637,13 @@ function ExportHistoryView({
   projectId,
   workspaceHandle,
   onExportsUpdated,
+  onPreview,
 }: {
   exports: ProjectExport[];
   projectId: string;
   workspaceHandle?: FileSystemDirectoryHandle;
   onExportsUpdated?: (updated: ProjectExport[]) => void;
+  onPreview?: (file: File, name: string) => void;
 }) {
   const [fileStatuses, setFileStatuses] = useState<Map<string, ExportFileStatus>>(new Map());
 
@@ -779,6 +809,20 @@ function ExportHistoryView({
               <div className="flex items-center gap-1.5 shrink-0">
                 {isAvailable ? (
                   <>
+                    {onPreview && status?.file && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => onPreview(status.file!, exp.name)}
+                        title="Preview rendered video inside app"
+                        className="flex items-center gap-1"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                        Preview
+                      </Button>
+                    )}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -904,5 +948,65 @@ function ExportHistoryView({
         )}
       </Modal>
     </>
+  );
+}
+
+/**
+ * Dedicated In-App Player for completed rendered export files.
+ */
+function RenderedVideoModal({
+  file,
+  filename,
+  onClose,
+}: {
+  file: File;
+  filename: string;
+  onClose: () => void;
+}) {
+  const [videoUrl, setVideoUrl] = useState<string>(() => URL.createObjectURL(file));
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    const frameId = requestAnimationFrame(() => {
+      setVideoUrl(url);
+    });
+    return () => {
+      cancelAnimationFrame(frameId);
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
+
+  return (
+    <Modal
+      open={true}
+      onClose={onClose}
+      title="Rendered Export Preview"
+      description={`Playing exported file: ${filename} (${formatBytes(file.size)})`}
+    >
+      <div className="space-y-4">
+        {/* Visual player surface */}
+        <div className="relative bg-black rounded-lg overflow-hidden aspect-video flex items-center justify-center border border-cs-border-subtle shadow-inner">
+          {videoUrl && (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              playsInline
+              className="w-full h-full object-contain"
+            />
+          )}
+        </div>
+
+        <div className="flex justify-between items-center text-xs text-cs-text-secondary pt-1">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span className="font-mono text-cs-text-primary">{filename}</span>
+          </div>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Close Preview
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }

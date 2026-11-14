@@ -1,16 +1,21 @@
 /**
- * Type definitions for Content Studio Repurposing Workflow (Phase 7).
+ * Type definitions for Content Studio Repurposing Workflow (Phase 7 & 8).
  *
  * Rules:
- * - 100% deterministic, local-first in-browser processing.
- * - Zero AI, zero LLMs, zero cloud APIs, zero transcription models.
+ * - 100% local-first in-browser processing.
+ * - Genuine content-aware repurposing: accepts user brief, deliverable goals, local transcripts.
+ * - No arbitrary hard-coded limits: variable durations derived from sentences and thoughts.
  * - All types are JSON-serializable for cache persistence in projects/<id>/cache/repurpose/.
  * - Preserves exact source asset IDs and microsecond-accurate second timestamps.
  */
 
 import type { ExportAspectRatio } from "./export.ts";
+import type { ContextDimensionAssessment } from "../lib/repurpose/contextIntegrity.ts";
+import type { SourceTranscript } from "./transcription.ts";
 
 export type RepurposeObjective = "highlights" | "educational" | "podcast";
+
+export type DeliverableType = "compilation" | "independent_clips";
 
 export interface RepurposeObjectiveDefinition {
   id: RepurposeObjective;
@@ -26,32 +31,45 @@ export const REPURPOSE_OBJECTIVES: Record<RepurposeObjective, RepurposeObjective
     label: "Highlights",
     description: "Discovers high-activity moments with prominent visual transitions and audio energy shifts.",
     heuristicsSummary: "Prioritizes scene-change candidate density, visual difference peaks, and audio energy transients.",
-    limitations: "Measures only luminance/color shifts and acoustic loudness dynamics. Does not understand narrative importance, humor, or subject actions.",
+    limitations: "Measures visual dynamics and acoustic loudness shifts. Pair with transcripts to verify spoken context and complete thoughts.",
   },
   educational: {
     id: "educational",
     label: "Educational",
     description: "Prefers sufficiently long, visually stable intervals with sustained pacing and clear boundary pauses.",
-    heuristicsSummary: "Prioritizes speech-like audio activity, stable camera/visuals (low cut density), and boundaries aligned to speech pauses.",
-    limitations: "Evaluates only audio envelope stability and scene pacing. Without transcripts, does not comprehend concepts, clarity, or spoken knowledge.",
+    heuristicsSummary: "Prioritizes speech activity, stable camera/visuals, and boundaries aligned to speech thoughts.",
+    limitations: "Evaluates speech pacing and visual stability. Spoken clarity and complete concepts are verified when transcripts are provided.",
   },
   podcast: {
     id: "podcast",
     label: "Podcast / Interview",
     description: "Prioritizes sustained speech activity regions and cuts cleanly at natural speech pauses.",
-    heuristicsSummary: "Prioritizes continuous speech-like frequency/envelope activity, penalizes mid-speech truncation, and snaps to low-energy pauses.",
-    limitations: "Identifies only acoustic speech-like energy patterns. Does not identify speakers, recognize dialogue, transcribe words, or follow conversational context.",
+    heuristicsSummary: "Prioritizes continuous speech activity, penalizes mid-speech truncation, and snaps to low-energy pauses.",
+    limitations: "Identifies acoustic speech-like energy patterns. Word and sentence boundaries are verified using local transcription or imported subtitles.",
   },
 };
 
 export interface RepurposeConfig {
   objective: RepurposeObjective;
+  /** Optional user brief: topic, angle, required ideas, tone */
+  userBrief?: string;
+  /** Type of output deliverable */
+  deliverableType?: DeliverableType;
+  /** Soft target total duration for compilation in seconds (optional) */
+  targetDuration?: number;
+  /** Optional target duration range */
+  targetDurationRange?: { min: number; max: number };
+  /** Preferred number of outputs/clips when specified by user */
   targetClipCount: number;
+  /** Soft guidance bounds (not hard filters) */
   minClipDuration: number;
   maxClipDuration: number;
   targetAspectRatio: ExportAspectRatio;
   keywords: string[];
   selectedAssetIds: string[];
+  /** Whether local offline transcription should be enabled if available */
+  enableTranscription?: boolean;
+  selectedModelName?: string;
 }
 
 export interface FrameSampleSignal {
@@ -92,8 +110,10 @@ export interface SourceAnalysisResult {
   sceneCutTimes: number[];
   silenceIntervals: Array<{ start: number; end: number }>;
   speechActivityIntervals: Array<{ start: number; end: number }>;
+  transcript?: SourceTranscript;
   algorithmVersion: string;
   sampledAt: string;
+  analyzedCoverage?: Array<{ start: number; end: number }>;
 }
 
 export interface CandidateScoreBreakdown {
@@ -102,6 +122,8 @@ export interface CandidateScoreBreakdown {
   boundaryQuality: number;
   pacingOrContinuity: number;
   keywordBonus: number;
+  briefRelevance?: number;
+  contextCompleteness?: number;
   penalty: number;
 }
 
@@ -116,6 +138,7 @@ export interface CandidateEvidence {
   startsAtNaturalBoundary: boolean;
   endsAtNaturalBoundary: boolean;
   matchedKeywords?: string[];
+  briefMatchReason?: string;
 }
 
 export interface RepurposeCandidate {
@@ -132,6 +155,23 @@ export interface RepurposeCandidate {
   explanation: string;
   selected: boolean;
   cacheKey: string;
+
+  // ── Context Integrity and Speech Dimensions (Phase 8) ─────────────────────
+  hasTranscriptEvidence?: boolean;
+  transcriptSnippet?: string;
+  precedingContextText?: string;
+  followingContextText?: string;
+  speechBoundaryIntegrity?: ContextDimensionAssessment;
+  thoughtCompleteness?: ContextDimensionAssessment;
+  contextSufficiency?: ContextDimensionAssessment;
+  standaloneClarity?: ContextDimensionAssessment;
+  endingClosure?: ContextDimensionAssessment;
+  contextExpansionApplied?: {
+    expandedStartSeconds: number;
+    expandedEndSeconds: number;
+    setupIncluded: string;
+  };
+  deliverableRationale?: string;
 }
 
 export interface EditPlanSegment {
@@ -144,6 +184,7 @@ export interface EditPlanSegment {
   timelineStart: number;
   candidateId: string;
   explanation: string;
+  captionText?: string;
 }
 
 export interface EditPlan {
@@ -156,24 +197,41 @@ export interface EditPlan {
   totalDuration: number;
   isValid: boolean;
   validationErrors: string[];
+  deliverableType?: DeliverableType;
+  sequenceRationale?: string;
 }
 
-export type RepurposeStage =
-  | "idle"
-  | "validating"
-  | "sampling-video"
-  | "analyzing-audio"
-  | "discovering"
-  | "scoring"
-  | "completed"
-  | "error"
-  | "cancelled";
-
 export interface RepurposeProgress {
-  stage: RepurposeStage;
-  percent: number; // 0..100
+  stage:
+    | "validating"
+    | "transcribing"
+    | "sampling-video"
+    | "analyzing-audio"
+    | "discovering"
+    | "scoring"
+    | "sequencing"
+    | "completed"
+    | "error";
+  percent: number;
   currentAssetIndex: number;
   totalAssets: number;
   currentAssetName: string;
   statusText: string;
+}
+
+export interface SourceCoverageReport {
+  assetId: string;
+  assetName: string;
+  totalDuration: number;
+  analyzedDuration: number;
+  coveragePercent: number;
+  isComplete: boolean;
+  ranges: Array<{ start: number; end: number }>;
+  skippedRanges?: Array<{ start: number; end: number; reason: string }>;
+  transcriptStatus: {
+    hasTranscript: boolean;
+    engine?: string;
+    cueCount: number;
+    isWordLevel: boolean;
+  };
 }

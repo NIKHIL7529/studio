@@ -1,18 +1,19 @@
 /**
- * Edit Decision List (EDL) and Timeline sequence construction (Phase 7).
+ * Edit Decision List (EDL) and Timeline sequence construction (Phase 7 & 8).
  *
  * Rules:
  * - Generates typed, immutable EditPlan representation.
  * - Validates finite timestamps, positive durations, monotonic ordering, and source bounds.
- * - Converts an EditPlan directly into a TimelineDocument consumed by the existing Phase 4 editor
- *   and rendered by Phase 5 export.
- * - Does not create a duplicate renderer or parallel timeline model.
+ * - Converts an EditPlan directly into a TimelineDocument with sequenced video clips.
+ * - When candidate transcripts are available, maps spoken cues to timed TextOverlay captions.
+ * - Ensures captions from one source never bleed into other clips or timeline gaps.
  */
 
-import type { TimelineDocument, TimelineClip, TimelineTrack } from "../../types/timeline.ts";
+import type { TimelineDocument, TimelineClip, TimelineTrack, TextOverlay } from "../../types/timeline.ts";
 import type { ProjectDocument } from "../../types/project.ts";
-import type { RepurposeCandidate, EditPlan, EditPlanSegment, RepurposeObjective } from "../../types/repurpose.ts";
+import type { RepurposeCandidate, EditPlan, EditPlanSegment, RepurposeObjective, DeliverableType } from "../../types/repurpose.ts";
 import type { ExportAspectRatio } from "../../types/export.ts";
+import type { SourceTranscript } from "../../types/transcription.ts";
 import { isValidUuid } from "../projectValidation.ts";
 import { createTimeline, validateTimeline } from "../timeline/model.ts";
 
@@ -92,7 +93,9 @@ export function createEditPlanFromCandidates(
   projectId: string,
   selectedCandidates: RepurposeCandidate[],
   objective: RepurposeObjective,
-  targetAspectRatio: ExportAspectRatio = "9:16"
+  targetAspectRatio: ExportAspectRatio = "9:16",
+  deliverableType: DeliverableType = "compilation",
+  sequenceRationale?: string
 ): EditPlan {
   // Sort candidates: group by source asset, then by sourceIn timestamp
   const sorted = [...selectedCandidates].sort((a, b) => {
@@ -121,6 +124,7 @@ export function createEditPlanFromCandidates(
       timelineStart: Number(currentTimelineStart.toFixed(2)),
       candidateId: cand.id,
       explanation: cand.explanation,
+      captionText: cand.transcriptSnippet,
     });
 
     currentTimelineStart += dur;
@@ -145,6 +149,8 @@ export function createEditPlanFromCandidates(
     totalDuration,
     isValid: true,
     validationErrors: [],
+    deliverableType,
+    sequenceRationale,
   };
 
   const validation = validateEditPlan(plan);
@@ -156,11 +162,12 @@ export function createEditPlanFromCandidates(
 
 /**
  * Converts an EditPlan into a TimelineDocument, populating the primary video track
- * with sequenced clips. Preserves existing audio/text track structures.
+ * with sequenced clips, and mapping transcript cues into timed captions.
  */
 export function applyEditPlanToTimeline(
   editPlan: EditPlan,
-  baseTimeline?: TimelineDocument
+  baseTimeline?: TimelineDocument,
+  sourceTranscripts?: Map<string, SourceTranscript>
 ): { timeline: TimelineDocument; errors: string[] } {
   const t = baseTimeline ? { ...baseTimeline } : createTimeline();
 
@@ -205,14 +212,65 @@ export function applyEditPlanToTimeline(
         clips: newClips,
       };
     }
-    // For other tracks, clear or keep
     return tr;
   });
+
+  // Generate timed captions from source transcripts
+  const newCaptions: TextOverlay[] = [];
+
+  for (const seg of editPlan.segments) {
+    const transcript = sourceTranscripts?.get(seg.sourceAssetId);
+    if (!transcript || transcript.cues.length === 0) continue;
+
+    // Filter cues overlapping this segment
+    for (const cue of transcript.cues) {
+      if (cue.end > seg.sourceIn && cue.start < seg.sourceOut) {
+        // Map cue time to timeline time
+        const relativeStart = Math.max(0, cue.start - seg.sourceIn);
+        const relativeEnd = Math.min(seg.duration, cue.end - seg.sourceIn);
+
+        if (relativeEnd <= relativeStart) continue;
+
+        const timelineStart = Number((seg.timelineStart + relativeStart).toFixed(2));
+        const timelineEnd = Number((seg.timelineStart + relativeEnd).toFixed(2));
+
+        const overlayId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `caption-${cue.id}`;
+
+        newCaptions.push({
+          id: overlayId,
+          text: cue.text,
+          startTime: timelineStart,
+          endTime: timelineEnd,
+          x: 0.5,
+          y: editPlan.targetAspectRatio === "9:16" ? 0.78 : 0.82,
+          fontSize: editPlan.targetAspectRatio === "9:16" ? 28 : 24,
+          color: "#ffffff",
+          align: "center",
+          overlayType: "caption",
+          preset: "clean",
+          backgroundColor: "rgba(0, 0, 0, 0.72)",
+          strokeColor: "#000000",
+          strokeWidth: 2,
+          fontWeight: 700,
+          boxWidthRatio: 0.85,
+          sourceAssetId: seg.sourceAssetId,
+          sourceCueId: cue.id,
+        });
+      }
+    }
+  }
+
+  // Preserve any non-caption title overlays from base timeline, then append new captions
+  const nonCaptionOverlays = t.textOverlays.filter((o) => o.overlayType !== "caption");
+  const allOverlays = [...nonCaptionOverlays, ...newCaptions];
 
   const updatedTimeline: TimelineDocument = {
     ...t,
     id: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : t.id,
     tracks: updatedTracks,
+    textOverlays: allOverlays,
     settings: {
       ...t.settings,
       targetAspectRatio: editPlan.targetAspectRatio,

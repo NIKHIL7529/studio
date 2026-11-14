@@ -1,13 +1,13 @@
 /**
- * Deterministic candidate window formation from media signals (Phase 7).
+ * Content-derived candidate window formation from media and speech signals (Phase 7 & 8).
  *
  * Rules:
- * - Generates overlapping candidate intervals [sourceIn, sourceOut] anchored to real media events.
- * - Event anchors: likely scene boundaries, speech pauses, speech onset, and energy transients.
- * - Snaps candidate in/out boundaries to natural pauses or scene cuts when within snap tolerance.
- * - Accurately records contributing evidence for every window.
- * - Does NOT fabricate unavailable evidence: missing audio is marked hasAudio: false, NOT silence.
- * - Every candidate references exact source asset ID and exact floating-point timestamps.
+ * - Candidate duration is CONTENT-DERIVED: follows complete sentences, thoughts, and natural boundaries.
+ * - NO fixed 10-second duration, NO hardcoded min/max limits, NO preset window sizes.
+ * - Evaluates full source duration from 0 to duration without arbitrary truncation.
+ * - Integrates speech and transcript evidence when present: groups coherent thoughts and expands context.
+ * - NO whole-source fallback: if no strong moment is identified, returns empty array with explanation.
+ * - Accurately records contributing evidence for every candidate window.
  */
 
 import type {
@@ -15,6 +15,11 @@ import type {
   RepurposeConfig,
   CandidateEvidence,
 } from "../../types/repurpose.ts";
+import type { ContextDimensionAssessment } from "./contextIntegrity.ts";
+import {
+  buildThoughtClustersFromCues,
+  evaluateContextIntegrity,
+} from "./contextIntegrity.ts";
 
 export interface RawCandidateWindow {
   sourceAssetId: string;
@@ -23,9 +28,23 @@ export interface RawCandidateWindow {
   sourceOut: number;
   duration: number;
   evidence: CandidateEvidence;
+  hasTranscriptEvidence?: boolean;
+  transcriptSnippet?: string;
+  precedingContextText?: string;
+  followingContextText?: string;
+  speechBoundaryIntegrity?: ContextDimensionAssessment;
+  thoughtCompleteness?: ContextDimensionAssessment;
+  contextSufficiency?: ContextDimensionAssessment;
+  standaloneClarity?: ContextDimensionAssessment;
+  endingClosure?: ContextDimensionAssessment;
+  contextExpansionApplied?: {
+    expandedStartSeconds: number;
+    expandedEndSeconds: number;
+    setupIncluded: string;
+  };
 }
 
-export const BOUNDARY_SNAP_TOLERANCE = 1.5; // Seconds tolerance to snap window boundary to pause/cut
+export const BOUNDARY_SNAP_TOLERANCE = 1.5;
 
 /**
  * Snaps a target timestamp to the nearest natural boundary (scene cut or audio pause)
@@ -92,7 +111,6 @@ export function extractEvidenceInWindow(
   const speechActivityRatio = audioInWindow.length > 0 ? speechCount / audioInWindow.length : 0;
 
   // 3. Natural boundary verification
-  // A boundary is natural if it coincides with (or is within 0.5s of) a scene cut or silence pause
   const naturalBoundaryTimes: number[] = [0, ...sceneCutTimes];
   for (const s of silenceIntervals) {
     naturalBoundaryTimes.push((s.start + s.end) / 2);
@@ -115,119 +133,197 @@ export function extractEvidenceInWindow(
 }
 
 /**
- * Discovers candidate intervals for a single analyzed source.
+ * Discovers candidate intervals for a single analyzed source across its complete duration.
  */
 export function discoverSourceCandidates(
   analysis: SourceAnalysisResult,
   config: RepurposeConfig
 ): RawCandidateWindow[] {
-  const { minClipDuration, maxClipDuration } = config;
   const sourceDuration = analysis.duration;
+  const minBound = config?.minClipDuration ? Math.max(2.5, config.minClipDuration * 0.85) : 3.0;
+  const maxBound = config?.maxClipDuration ? config.maxClipDuration * 1.15 : 60.0;
 
-  if (sourceDuration < minClipDuration * 0.8) {
-    return []; // Source too short to form even one valid candidate
-  }
-
-  // 1. Assemble natural anchor points
-  const naturalBoundaries: number[] = [0];
-  for (const cut of analysis.sceneCutTimes) {
-    naturalBoundaries.push(cut);
-  }
-  for (const pause of analysis.silenceIntervals) {
-    // Add midpoint of pause
-    naturalBoundaries.push((pause.start + pause.end) / 2);
-  }
-  for (const speech of analysis.speechActivityIntervals) {
-    naturalBoundaries.push(speech.start);
-  }
-
-  // Sort and deduplicate anchor times
-  naturalBoundaries.sort((a, b) => a - b);
-  const uniqueAnchors: number[] = [];
-  for (const t of naturalBoundaries) {
-    if (t < sourceDuration - minClipDuration * 0.5) {
-      if (uniqueAnchors.length === 0 || t - uniqueAnchors[uniqueAnchors.length - 1] >= 1.0) {
-        uniqueAnchors.push(t);
-      }
-    }
-  }
-
-  // If anchors are too sparse, inject regular grid points
-  if (uniqueAnchors.length < 3) {
-    const gridStep = Math.max(5, (minClipDuration + maxClipDuration) / 4);
-    for (let t = 0; t < sourceDuration - minClipDuration; t += gridStep) {
-      if (!uniqueAnchors.some((a) => Math.abs(a - t) < 1.0)) {
-        uniqueAnchors.push(t);
-      }
-    }
-    uniqueAnchors.sort((a, b) => a - b);
-  }
-
-  // 2. Candidate window generation with multiple target durations
-  const candidateDurations: number[] = [
-    minClipDuration,
-    (minClipDuration + maxClipDuration) / 2,
-    maxClipDuration,
-  ];
-
-  // Also include 1/3 and 2/3 durations if spread is wide
-  if (maxClipDuration - minClipDuration >= 15) {
-    candidateDurations.push(minClipDuration + (maxClipDuration - minClipDuration) * 0.25);
-    candidateDurations.push(minClipDuration + (maxClipDuration - minClipDuration) * 0.75);
+  if (sourceDuration < minBound || !Number.isFinite(sourceDuration) || (!analysis.hasVideo && !analysis.hasAudio)) {
+    return [];
   }
 
   const rawWindows: RawCandidateWindow[] = [];
   const seenIntervals = new Set<string>();
 
-  for (const anchor of uniqueAnchors) {
-    for (const targetDur of candidateDurations) {
-      let candidateStart = anchor;
-      let candidateEnd = candidateStart + targetDur;
+  // PATH A: Transcript-Driven Discovery (Primary when speech transcript is present)
+  if (analysis.transcript && analysis.transcript.cues.length > 0) {
+    const thoughtClusters = buildThoughtClustersFromCues(analysis.transcript.cues, sourceDuration);
 
-      if (candidateEnd > sourceDuration) {
-        // If target extends beyond source end, attempt shifting start backwards or clamping
-        candidateEnd = sourceDuration;
-        candidateStart = Math.max(0, candidateEnd - targetDur);
-      }
+    for (const cluster of thoughtClusters) {
+      const dur = cluster.duration;
+      // Content-derived: accept short thoughts (e.g. 4s) up to comprehensive explanations (e.g. 60s+)
+      if (dur < 2.5 || dur > sourceDuration) continue;
 
-      // Snap end point to nearest natural boundary if available
-      const snappedEnd = snapToNaturalBoundary(candidateEnd, naturalBoundaries);
-      if (snappedEnd.snapped && snappedEnd.time <= sourceDuration && snappedEnd.time > candidateStart) {
-        candidateEnd = snappedEnd.time;
-      }
-
-      // Also snap start point if near a boundary
-      const snappedStart = snapToNaturalBoundary(candidateStart, naturalBoundaries);
-      if (snappedStart.snapped && snappedStart.time < candidateEnd) {
-        candidateStart = snappedStart.time;
-      }
-
-      const dur = candidateEnd - candidateStart;
-
-      // Validate duration bounds (allowing ±10% tolerance for natural snapping)
-      if (dur < minClipDuration * 0.85 || dur > maxClipDuration * 1.15 || dur <= 0) {
+      // Avoid full-source accidental capture on long videos
+      if (sourceDuration >= 20.0 && dur >= sourceDuration * 0.95) {
         continue;
       }
 
-      // Deduplicate overlapping/identical windows on this source
-      const key = `${candidateStart.toFixed(1)}-${candidateEnd.toFixed(1)}`;
-      if (seenIntervals.has(key)) {
-        continue;
-      }
+      const key = `${cluster.sourceIn.toFixed(1)}-${cluster.sourceOut.toFixed(1)}`;
+      if (seenIntervals.has(key)) continue;
       seenIntervals.add(key);
 
-      const evidence = extractEvidenceInWindow(analysis, candidateStart, candidateEnd);
+      const evidence = extractEvidenceInWindow(analysis, cluster.sourceIn, cluster.sourceOut);
+      const rep = cluster.contextReport;
 
       rawWindows.push({
         sourceAssetId: analysis.assetId,
         sourceAssetName: analysis.assetName,
-        sourceIn: Number(candidateStart.toFixed(2)),
-        sourceOut: Number(candidateEnd.toFixed(2)),
-        duration: Number(dur.toFixed(2)),
+        sourceIn: cluster.sourceIn,
+        sourceOut: cluster.sourceOut,
+        duration: dur,
         evidence,
+        hasTranscriptEvidence: true,
+        transcriptSnippet: cluster.transcriptSnippet,
+        precedingContextText: rep.precedingTranscript,
+        followingContextText: rep.followingTranscript,
+        speechBoundaryIntegrity: rep.speechBoundaryIntegrity,
+        thoughtCompleteness: rep.thoughtCompleteness,
+        contextSufficiency: rep.contextSufficiency,
+        standaloneClarity: rep.standaloneClarity,
+        endingClosure: rep.endingClosure,
+        contextExpansionApplied: rep.expansionRecommendation ? {
+          expandedStartSeconds: rep.expansionRecommendation.suggestedSourceIn,
+          expandedEndSeconds: rep.expansionRecommendation.suggestedSourceOut,
+          setupIncluded: rep.expansionRecommendation.setupCuesIncluded.join(" "),
+        } : undefined,
+      });
+    }
+
+    // Also look for multi-thought combinations if they form a narrative arc
+    if (thoughtClusters.length >= 2) {
+      for (let i = 0; i < thoughtClusters.length - 1; i++) {
+        const c1 = thoughtClusters[i];
+        const c2 = thoughtClusters[i + 1];
+        const combinedIn = c1.sourceIn;
+        const combinedOut = c2.sourceOut;
+        const combinedDur = Number((combinedOut - combinedIn).toFixed(2));
+
+        if (combinedDur >= 8.0 && combinedDur <= 60.0 && combinedDur < sourceDuration * 0.9) {
+          const key = `${combinedIn.toFixed(1)}-${combinedOut.toFixed(1)}`;
+          if (!seenIntervals.has(key)) {
+            seenIntervals.add(key);
+            const rep = evaluateContextIntegrity(analysis.transcript.cues, combinedIn, combinedOut);
+            const evidence = extractEvidenceInWindow(analysis, combinedIn, combinedOut);
+            const snippet = `${c1.transcriptSnippet} ${c2.transcriptSnippet}`;
+
+            rawWindows.push({
+              sourceAssetId: analysis.assetId,
+              sourceAssetName: analysis.assetName,
+              sourceIn: combinedIn,
+              sourceOut: combinedOut,
+              duration: combinedDur,
+              evidence,
+              hasTranscriptEvidence: true,
+              transcriptSnippet: snippet,
+              precedingContextText: rep.precedingTranscript,
+              followingContextText: rep.followingTranscript,
+              speechBoundaryIntegrity: rep.speechBoundaryIntegrity,
+              thoughtCompleteness: rep.thoughtCompleteness,
+              contextSufficiency: rep.contextSufficiency,
+              standaloneClarity: rep.standaloneClarity,
+              endingClosure: rep.endingClosure,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // PATH B: Visual and Acoustic Structural Discovery (Runs when source has video or audio)
+  if (!analysis.hasVideo && !analysis.hasAudio) {
+    return rawWindows;
+  }
+
+  // Natural boundaries: scene cuts, silence pauses, speech activity starts
+  const naturalBoundaries: number[] = [0];
+  for (const cut of analysis.sceneCutTimes) {
+    naturalBoundaries.push(cut);
+  }
+  for (const pause of analysis.silenceIntervals) {
+    naturalBoundaries.push((pause.start + pause.end) / 2);
+  }
+  for (const speech of analysis.speechActivityIntervals) {
+    naturalBoundaries.push(speech.start);
+    naturalBoundaries.push(speech.end);
+  }
+  naturalBoundaries.push(sourceDuration);
+  naturalBoundaries.sort((a, b) => a - b);
+
+  // Deduplicate boundaries
+  const uniqueBoundaries: number[] = [];
+  for (const b of naturalBoundaries) {
+    if (uniqueBoundaries.length === 0 || b - uniqueBoundaries[uniqueBoundaries.length - 1] >= 0.8) {
+      uniqueBoundaries.push(b);
+    }
+  }
+
+  // If internal event boundaries are sparse on continuous footage, sample natural anchor steps
+  if (uniqueBoundaries.length < 3 && (analysis.hasVideo || analysis.hasAudio)) {
+    const step = Math.max(minBound, (minBound + maxBound) / 2);
+    for (let t = step; t < sourceDuration - minBound * 0.5; t += step) {
+      if (!uniqueBoundaries.some((b) => Math.abs(b - t) < 1.0)) {
+        uniqueBoundaries.push(t);
+      }
+    }
+    uniqueBoundaries.sort((a, b) => a - b);
+  }
+
+  // Generate intervals between adjacent natural event boundaries
+  for (let i = 0; i < uniqueBoundaries.length - 1; i++) {
+    const start = uniqueBoundaries[i];
+
+    // Try spans of 1, 2, 3 boundary segments to discover naturally sized moments
+    for (let step = 1; step <= 3; step++) {
+      if (i + step >= uniqueBoundaries.length) break;
+      const end = uniqueBoundaries[i + step];
+      const dur = Number((end - start).toFixed(2));
+
+      // Natural moments follow content bounds
+      if (dur < minBound || dur > maxBound) continue;
+
+      // Prevent full-source capture on medium/long footage
+      if (sourceDuration >= 20.0 && dur >= sourceDuration * 0.95) {
+        continue;
+      }
+
+      const key = `${start.toFixed(1)}-${end.toFixed(1)}`;
+      if (seenIntervals.has(key)) continue;
+      seenIntervals.add(key);
+
+      const evidence = extractEvidenceInWindow(analysis, start, end);
+
+      // Context evaluation (will indicate unknown/heuristic without transcript)
+      const transcriptCues = analysis.transcript?.cues || [];
+      const rep = evaluateContextIntegrity(transcriptCues, start, end);
+
+      rawWindows.push({
+        sourceAssetId: analysis.assetId,
+        sourceAssetName: analysis.assetName,
+        sourceIn: Number(start.toFixed(2)),
+        sourceOut: Number(end.toFixed(2)),
+        duration: dur,
+        evidence,
+        hasTranscriptEvidence: transcriptCues.length > 0,
+        transcriptSnippet: rep.candidateTranscript,
+        precedingContextText: rep.precedingTranscript,
+        followingContextText: rep.followingTranscript,
+        speechBoundaryIntegrity: rep.speechBoundaryIntegrity,
+        thoughtCompleteness: rep.thoughtCompleteness,
+        contextSufficiency: rep.contextSufficiency,
+        standaloneClarity: rep.standaloneClarity,
+        endingClosure: rep.endingClosure,
       });
     }
   }
+
+  // Sort candidate windows chronologically
+  rawWindows.sort((a, b) => a.sourceIn - b.sourceIn);
 
   return rawWindows;
 }

@@ -1,40 +1,17 @@
 /**
- * Timeline data model for Content Studio.
+ * Timeline domain types for Content Studio (Phase 4, 7 & 8).
  *
  * Rules:
- * - All types are JSON-serializable (no File, Blob, HTMLElement, etc.)
- * - All IDs are stable string UUIDs
- * - Source time (sourceIn/sourceOut within the source file) is strictly
- *   separate from timeline time (startTime/duration on the track)
- * - TimelineDocument is embedded in ProjectDocument as an optional field;
- *   schemaVersion remains 1
+ * - Timestamps are in seconds as non-negative floating-point numbers.
+ * - Microsecond precision is preserved during calculations.
+ * - Timeline is strictly local, validated, and JSON-serializable.
+ * - Tracks are ordered: lower order renders higher in the layer stack.
+ * - TextOverlays support both distinct title/headline overlays and timed spoken captions.
  */
 
-/** Embedded timeline document, stored inside ProjectDocument.timeline */
-export interface TimelineDocument {
-  /** Stable UUID for this timeline */
-  id: string;
-  tracks: TimelineTrack[];
-  textOverlays: TextOverlay[];
-  settings: TimelineSettings;
-}
-
-export interface TimelineSettings {
-  targetAspectRatio?: "16:9" | "9:16" | "1:1" | "4:5";
-}
+import type { ExportAspectRatio } from "./export.ts";
 
 export type TrackType = "video" | "audio";
-
-export interface TimelineTrack {
-  /** Stable UUID */
-  id: string;
-  type: TrackType;
-  name: string;
-  /** Display order — lower numbers appear higher/earlier in the UI */
-  order: number;
-  muted: boolean;
-  clips: TimelineClip[];
-}
 
 export interface TimelineClip {
   /** Stable UUID */
@@ -43,23 +20,20 @@ export interface TimelineClip {
   assetId: string;
   /** References TimelineTrack.id */
   trackId: string;
-
-  // ── Timeline position ────────────────────────────────────────────────────
-  /** Seconds from the timeline origin where this clip begins */
+  /** Seconds on the timeline where the clip starts (>= 0) */
   startTime: number;
-
-  // ── Source range ─────────────────────────────────────────────────────────
-  /** Start of the used region in the source file (seconds, inclusive) */
+  /** Seconds into the source asset where playback begins (>= 0) */
   sourceIn: number;
-  /** End of the used region in the source file (seconds, exclusive) */
+  /** Seconds into the source asset where playback ends (> sourceIn) */
   sourceOut: number;
-
-  // Derived: duration = sourceOut - sourceIn
-
-  /** Playback volume, 0–1 (default 1) */
+  /** Volume multiplier: 0 = mute, 1 = 100% normal, > 1 = boost */
   volume: number;
   muted: boolean;
 }
+
+export type TextOverlayType = "title" | "caption";
+
+export type CaptionPreset = "clean" | "bold" | "minimal";
 
 export interface TextOverlay {
   /** Stable UUID */
@@ -80,4 +54,46 @@ export interface TextOverlay {
   /** CSS color string */
   color: string;
   align: "left" | "center" | "right";
+
+  // ── Caption & Spoken Word Styling (Phase 8) ──────────────────────────────
+  /** Distinct overlay role: "title" headline vs timed "caption" */
+  overlayType?: TextOverlayType;
+  /** Caption visual styling preset */
+  preset?: CaptionPreset;
+  /** Background pill/box color (e.g. "rgba(0,0,0,0.75)" or "#000000") */
+  backgroundColor?: string;
+  /** Outline stroke color for high contrast text */
+  strokeColor?: string;
+  /** Outline stroke width in px */
+  strokeWidth?: number;
+  /** Font weight: e.g. 600, 700, 800 */
+  fontWeight?: string | number;
+  /** Safe margin wrapping width as fraction of canvas width (e.g. 0.85) */
+  boxWidthRatio?: number;
+  /** Reference to originating source asset */
+  sourceAssetId?: string;
+  /** Reference to originating subtitle cue */
+  sourceCueId?: string;
+}
+
+export interface TimelineTrack {
+  /** Stable UUID */
+  id: string;
+  type: TrackType;
+  name: string;
+  /** Display and z-order index (0 = top-most / primary) */
+  order: number;
+  muted: boolean;
+  clips: TimelineClip[];
+}
+
+export interface TimelineSettings {
+  targetAspectRatio?: ExportAspectRatio;
+}
+
+export interface TimelineDocument {
+  id: string;
+  tracks: TimelineTrack[];
+  textOverlays: TextOverlay[];
+  settings: TimelineSettings;
 }

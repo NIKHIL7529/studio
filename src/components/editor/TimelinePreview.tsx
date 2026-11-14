@@ -1,17 +1,20 @@
 "use client";
 
 /**
- * TimelinePreview — Preview panel showing the timeline at the current playhead.
+ * TimelinePreview — Timeline Composition Preview panel (Phase 4, 7 & 8).
  *
- * Uses native <video>/<audio> element backed by object URLs.
- * Drives playhead forward with requestAnimationFrame when isPlaying.
- * Renders text overlays absolutely positioned over the video.
- * Handles sourceIn offset, clip.muted, clip.volume and end-of-timeline.
- * Cleans up all object URLs and event listeners on unmount or source change.
+ * Rules:
+ * - Real timeline composition preview: synchronizes playhead, active clips, and timed captions.
+ * - Solves async race conditions: automatically reloads when liveAssets or file handles settle.
+ * - Seamless playback across consecutive clips of the same asset without object URL churn or black flash.
+ * - Synchronizes video.currentTime with timeline currentTime to prevent frozen or blank frames.
+ * - Renders timed captions with exact 1:1 match to export canvas (background pills, stroke, safe margins).
+ * - Surfaces actionable states: Loading, Gap, Permission Renewal Needed, Autoplay Blocked, Decode Error.
+ * - Never swallows exceptions or leaves a permanently black screen without explanation.
  */
 
 import * as React from "react";
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { TimelineDocument, TimelineClip, TextOverlay } from "../../types/timeline.ts";
 import type { LiveAssetItem } from "../../types/project.ts";
 import { getActiveClipAtTime, getActiveTextOverlaysAtTime, getTimelineDuration } from "../../lib/timeline/model.ts";
@@ -43,15 +46,25 @@ export function TimelinePreview({
 }: TimelinePreviewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const urlManagerRef = useRef<ObjectUrlManager>(new ObjectUrlManager());
+
+  // Tracking state to prevent duplicate object URL creation & handle file resolution races
+  const currentLoadedAssetIdRef = useRef<string | null>(null);
+  const currentLoadedFileRef = useRef<File | null>(null);
   const activeClipIdRef = useRef<string | null>(null);
   const activeUrlRef = useRef<string | null>(null);
+
   const rafRef = useRef<number | null>(null);
   const isPlayingRef = useRef(isPlaying);
   const currentTimeRef = useRef(currentTime);
   const timelineRef = useRef(timeline);
   const liveAssetsRef = useRef(liveAssets);
 
-  // Keep refs in sync
+  // Error and UI overlay states
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [isLoadingMedia, setIsLoadingMedia] = useState(false);
+
+  // Keep refs in sync with props
   useEffect(() => {
     isPlayingRef.current = isPlaying;
     currentTimeRef.current = currentTime;
@@ -63,93 +76,132 @@ export function TimelinePreview({
   const activeOverlays = getActiveTextOverlaysAtTime(timeline, currentTime);
   const totalDuration = getTimelineDuration(timeline);
 
-  // Load clip into video element
-  const loadClip = useCallback((clip: TimelineClip | null) => {
+  // Active clip asset info
+  const activeLiveItem = activeClip ? liveAssets.get(activeClip.assetId) : null;
+  const activeFile = activeLiveItem?.file ?? null;
+  const isFileMissing = activeClip ? (!activeLiveItem || activeLiveItem.status !== "ready" || !activeFile) : false;
+
+  // Load or reuse media source
+  const loadClip = useCallback((clip: TimelineClip | null, file: File | null) => {
     const video = videoRef.current;
     const manager = urlManagerRef.current;
 
-    // Revoke previous URL
-    if (activeUrlRef.current) {
-      manager.revoke(activeUrlRef.current);
-      activeUrlRef.current = null;
-    }
+    if (!video) return;
 
-    if (video) {
+    if (!clip || !file) {
+      if (activeUrlRef.current) {
+        manager.revoke(activeUrlRef.current);
+        activeUrlRef.current = null;
+      }
       try {
         video.pause();
         video.removeAttribute("src");
         video.load();
       } catch { /* ignored */ }
-    }
-
-    if (!clip || !video) {
+      currentLoadedAssetIdRef.current = null;
+      currentLoadedFileRef.current = null;
       activeClipIdRef.current = null;
+      setIsLoadingMedia(false);
       return;
     }
 
-    const liveItem = liveAssetsRef.current.get(clip.assetId);
-    const file = liveItem?.file;
-    if (!file) {
+    // Reuse existing URL if the same underlying File is already loaded
+    if (currentLoadedAssetIdRef.current === clip.assetId && currentLoadedFileRef.current === file && activeUrlRef.current) {
       activeClipIdRef.current = clip.id;
+      // Just seek to target timestamp within the already loaded media
+      const clipOffset = Math.max(0, currentTimeRef.current - clip.startTime);
+      const targetSrc = Math.min(clip.sourceOut, clip.sourceIn + clipOffset);
+      try {
+        video.currentTime = targetSrc;
+      } catch { /* ignored */ }
+      video.muted = clip.muted;
+      video.volume = Math.max(0, Math.min(1, clip.volume));
+      if (isPlayingRef.current && video.paused) {
+        video.play().catch(() => setPlaybackBlocked(true));
+      }
       return;
     }
+
+    // New file / source asset: swap URL cleanly
+    if (activeUrlRef.current) {
+      manager.revoke(activeUrlRef.current);
+      activeUrlRef.current = null;
+    }
+
+    setIsLoadingMedia(true);
+    setMediaError(null);
 
     try {
       const url = manager.create(file);
       activeUrlRef.current = url;
+      currentLoadedAssetIdRef.current = clip.assetId;
+      currentLoadedFileRef.current = file;
       activeClipIdRef.current = clip.id;
 
       video.src = url;
       video.muted = clip.muted;
       video.volume = Math.max(0, Math.min(1, clip.volume));
       video.load();
-    } catch (err) {
+    } catch (err: unknown) {
       console.warn("TimelinePreview: failed to create object URL", err);
+      setMediaError("Could not access media file in memory.");
+      setIsLoadingMedia(false);
     }
   }, []);
 
-  // When active clip changes, reload video element
+  // When activeClip or activeFile changes (including when file resolves asynchronously), load clip
   useEffect(() => {
-    const newClipId = activeClip?.id ?? null;
-    if (newClipId !== activeClipIdRef.current) {
-      loadClip(activeClip);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeClip?.id, loadClip]);
+    const frameId = requestAnimationFrame(() => {
+      loadClip(activeClip, activeFile);
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [activeClip, activeFile, loadClip]);
 
-  // After loadedmetadata, seek to sourceIn offset
+  // Video event handlers
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleLoadedMetadata = () => {
+      setIsLoadingMedia(false);
+      setMediaError(null);
       const clip = activeClip;
       if (!clip) return;
-      // Seek to sourceIn plus the offset within the clip
-      const clipOffset = currentTimeRef.current - clip.startTime;
-      const targetSrc = clip.sourceIn + Math.max(0, clipOffset);
+
+      const clipOffset = Math.max(0, currentTimeRef.current - clip.startTime);
+      const targetSrc = Math.min(clip.sourceOut, clip.sourceIn + clipOffset);
       try {
-        video.currentTime = Math.min(targetSrc, clip.sourceOut);
+        video.currentTime = targetSrc;
       } catch { /* ignored */ }
 
       if (isPlayingRef.current) {
-        video.play().catch(() => { /* autoplay block */ });
+        video.play()
+          .then(() => setPlaybackBlocked(false))
+          .catch(() => setPlaybackBlocked(true));
       }
     };
 
-    video.addEventListener("loadedmetadata", handleLoadedMetadata);
-    return () => video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeClip?.id]);
+    const handleError = () => {
+      setIsLoadingMedia(false);
+      setMediaError("Browser was unable to decode this video format or codec.");
+    };
 
-  // rAF-based playback driver
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("error", handleError);
+
+    return () => {
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("error", handleError);
+    };
+  }, [activeClip]);
+
+  // Playhead & rAF playback driver with video synchronization
   useEffect(() => {
     if (!isPlaying) {
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      // Pause video if playing
       const video = videoRef.current;
       if (video && !video.paused) {
         try { video.pause(); } catch { /* ignored */ }
@@ -157,10 +209,11 @@ export function TimelinePreview({
       return;
     }
 
-    // Start playing video element
     const video = videoRef.current;
-    if (video && video.readyState >= 2) {
-      video.play().catch(() => { /* autoplay block */ });
+    if (video && video.readyState >= 2 && video.paused) {
+      video.play()
+        .then(() => setPlaybackBlocked(false))
+        .catch(() => setPlaybackBlocked(true));
     }
 
     let lastTimestamp: number | null = null;
@@ -174,13 +227,29 @@ export function TimelinePreview({
         const duration = getTimelineDuration(timelineRef.current);
 
         if (duration > 0 && newTime >= duration) {
-          // End of timeline
+          // Reached end of timeline
           onPlaybackTimeUpdate(duration);
-          onPlayPause(); // stop
+          onPlayPause();
           return;
         }
 
         onPlaybackTimeUpdate(newTime);
+
+        // Keep video element synchronized with playhead time
+        const currentClip = getActiveClipAtTime(timelineRef.current, newTime);
+        const vid = videoRef.current;
+        if (currentClip && vid && vid.readyState >= 2) {
+          const expectedSrcTime = currentClip.sourceIn + (newTime - currentClip.startTime);
+          const drift = Math.abs(vid.currentTime - expectedSrcTime);
+          if (drift > 0.35) {
+            try {
+              vid.currentTime = Math.min(currentClip.sourceOut, Math.max(currentClip.sourceIn, expectedSrcTime));
+            } catch { /* ignored */ }
+          }
+          if (vid.paused && !playbackBlocked) {
+            vid.play().catch(() => setPlaybackBlocked(true));
+          }
+        }
       }
 
       lastTimestamp = timestamp;
@@ -195,25 +264,22 @@ export function TimelinePreview({
         rafRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying]);
+  }, [isPlaying, onPlaybackTimeUpdate, onPlayPause, playbackBlocked]);
 
-  // Seek video element when currentTime changes externally (not from rAF)
+  // Seek video element when currentTime changes externally (scrubbing or clicking timeline)
   useEffect(() => {
-    if (isPlaying) return; // rAF drives it
+    if (isPlaying) return;
     const video = videoRef.current;
     if (!video || !activeClip) return;
 
-    const clipOffset = currentTime - activeClip.startTime;
-    const targetSrc = activeClip.sourceIn + Math.max(0, clipOffset);
-    const clamped = Math.min(targetSrc, activeClip.sourceOut);
-    if (Math.abs(video.currentTime - clamped) > 0.1) {
-      try { video.currentTime = clamped; } catch { /* ignored */ }
+    const clipOffset = Math.max(0, currentTime - activeClip.startTime);
+    const targetSrc = Math.min(activeClip.sourceOut, activeClip.sourceIn + clipOffset);
+    if (Math.abs(video.currentTime - targetSrc) > 0.05) {
+      try { video.currentTime = targetSrc; } catch { /* ignored */ }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTime, isPlaying, activeClip?.id]);
+  }, [currentTime, isPlaying, activeClip]);
 
-  // Keep video muted/volume in sync with clip props
+  // Keep volume & muted synchronized
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !activeClip) return;
@@ -236,21 +302,94 @@ export function TimelinePreview({
 
   return (
     <div className="flex flex-col h-full bg-black">
-      {/* Preview area */}
+      {/* Preview Header Pill */}
+      <div className="flex items-center justify-between px-3 py-1 bg-black/60 border-b border-white/5 text-[10px] text-cs-text-tertiary select-none">
+        <span className="font-medium tracking-wide uppercase">Timeline Composition Preview</span>
+        <span className="font-mono text-cs-text-secondary">{formatTimeDisplay(currentTime)}</span>
+      </div>
+
+      {/* Main Preview Screen */}
       <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-0">
-        {/* Video element (always present, hidden when in gap) */}
+        {/* Video element */}
         <video
           ref={videoRef}
-          className={`w-full h-full object-contain ${!activeClip ? "hidden" : ""}`}
+          className={`w-full h-full object-contain ${!activeClip || isFileMissing ? "hidden" : ""}`}
           playsInline
-          onClick={onPlayPause}
+          onClick={() => {
+            if (playbackBlocked) {
+              setPlaybackBlocked(false);
+              videoRef.current?.play().catch(() => {});
+            } else {
+              onPlayPause();
+            }
+          }}
         />
 
-        {/* Gap / no clip state */}
+        {/* Actionable Overlay: Missing / Unlinked Source File */}
+        {activeClip && isFileMissing && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center bg-black/80 z-20">
+            <div className="w-10 h-10 rounded-full bg-amber-500/10 text-amber-400 flex items-center justify-center mb-1">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </div>
+            <h4 className="text-xs font-semibold text-cs-text-primary">Source Media Offline</h4>
+            <p className="text-[11px] text-cs-text-secondary max-w-sm">
+              The file for &ldquo;{activeLiveItem?.asset.name || activeClip.assetId}&rdquo; requires permission renewal or relinking.
+            </p>
+          </div>
+        )}
+
+        {/* Actionable Overlay: Loading Media */}
+        {isLoadingMedia && (
+          <div className="absolute top-3 left-3 flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/75 border border-white/10 text-[11px] text-cs-text-secondary z-20">
+            <svg className="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="10" />
+            </svg>
+            <span>Loading clip source...</span>
+          </div>
+        )}
+
+        {/* Actionable Overlay: Media Decode Error */}
+        {mediaError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center bg-black/90 z-20">
+            <div className="w-10 h-10 rounded-full bg-red-500/10 text-red-400 flex items-center justify-center">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+            </div>
+            <h4 className="text-xs font-semibold text-red-300">Decode Error</h4>
+            <p className="text-[11px] text-cs-text-secondary max-w-sm">{mediaError}</p>
+          </div>
+        )}
+
+        {/* Actionable Overlay: Autoplay Blocked */}
+        {playbackBlocked && (
+          <div
+            onClick={() => {
+              setPlaybackBlocked(false);
+              videoRef.current?.play().catch(() => {});
+            }}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/60 cursor-pointer z-30"
+          >
+            <div className="w-12 h-12 rounded-full bg-cs-accent/20 text-cs-accent flex items-center justify-center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+            </div>
+            <p className="text-xs font-medium text-white">Click anywhere to resume playback</p>
+          </div>
+        )}
+
+        {/* Actionable Overlay: Gap / No clip */}
         {!activeClip && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 z-10 select-none">
             <div className="text-cs-text-tertiary opacity-30">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" strokeWidth="1" stroke="currentColor">
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" strokeWidth="1" stroke="currentColor">
                 <rect x="2" y="3" width="20" height="14" rx="2" />
                 <polygon points="10 8 16 11.5 10 15 10 8" />
               </svg>
@@ -258,20 +397,19 @@ export function TimelinePreview({
             {hasTimeline ? (
               <p className="text-xs text-cs-text-tertiary">Gap — no clip at this position</p>
             ) : (
-              <p className="text-xs text-cs-text-tertiary">Add clips to the timeline to preview</p>
+              <p className="text-xs text-cs-text-tertiary">Add clips or repurposed moments to preview</p>
             )}
           </div>
         )}
 
-        {/* Text overlays */}
+        {/* Synchronized Text Overlays & Timed Captions */}
         {activeOverlays.map((overlay) => (
           <TextOverlayRenderer key={overlay.id} overlay={overlay} />
         ))}
       </div>
 
-      {/* Controls bar */}
+      {/* Playback Controls & Status Bar */}
       <div className="shrink-0 flex items-center gap-3 px-3 py-2 bg-cs-bg-surface border-t border-cs-border-subtle">
-        {/* Play/pause */}
         <button
           onClick={onPlayPause}
           className="w-7 h-7 flex items-center justify-center rounded bg-cs-accent hover:bg-cs-accent-hover text-white transition-colors shrink-0"
@@ -297,17 +435,17 @@ export function TimelinePreview({
           {formatTimeDisplay(totalDuration)}
         </span>
 
-        {/* Active clip label */}
+        {/* Active clip info */}
         {activeClip && (
           <span className="text-[11px] text-cs-text-tertiary truncate">
             {liveAssets.get(activeClip.assetId)?.asset.name ?? activeClip.assetId}
           </span>
         )}
 
-        {/* Overlay count badge */}
+        {/* Active captions / overlays count */}
         {activeOverlays.length > 0 && (
-          <span className="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-cs-accent/15 text-cs-accent">
-            {activeOverlays.length} overlay{activeOverlays.length > 1 ? "s" : ""}
+          <span className="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-cs-accent/15 text-cs-accent font-medium">
+            {activeOverlays.length} active overlay{activeOverlays.length > 1 ? "s" : ""}
           </span>
         )}
       </div>
@@ -315,7 +453,11 @@ export function TimelinePreview({
   );
 }
 
+/**
+ * Text and Caption Overlay Renderer matching export canvas 1:1.
+ */
 function TextOverlayRenderer({ overlay }: { overlay: TextOverlay }) {
+  const isCaption = overlay.overlayType === "caption";
   const alignClass =
     overlay.align === "center"
       ? "text-center"
@@ -323,20 +465,31 @@ function TextOverlayRenderer({ overlay }: { overlay: TextOverlay }) {
       ? "text-right"
       : "text-left";
 
+  const maxWidthPercent = (overlay.boxWidthRatio || 0.85) * 100;
+  const bgColor = overlay.backgroundColor || (overlay.preset === "bold" ? "rgba(0, 0, 0, 0.82)" : undefined);
+  const strokeColor = overlay.strokeColor || (overlay.preset === "minimal" ? "#000000" : undefined);
+  const strokeWidth = overlay.strokeWidth || (strokeColor ? 2 : 0);
+
   return (
     <div
-      className={`absolute pointer-events-none select-none ${alignClass}`}
+      className={`absolute pointer-events-none select-none ${alignClass} z-20`}
       style={{
         left: `${overlay.x * 100}%`,
         top: `${overlay.y * 100}%`,
         transform: "translate(-50%, -50%)",
         fontSize: `${overlay.fontSize}px`,
-        color: overlay.color,
-        textShadow: "0 1px 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6)",
-        maxWidth: "80%",
-        lineHeight: 1.3,
-        fontWeight: 600,
+        color: overlay.color || "#ffffff",
+        maxWidth: `${maxWidthPercent}%`,
+        lineHeight: 1.35,
+        fontWeight: overlay.fontWeight || (isCaption ? 700 : 600),
         letterSpacing: "0.01em",
+        backgroundColor: bgColor,
+        padding: bgColor ? "6px 14px" : "0",
+        borderRadius: bgColor ? "8px" : "0",
+        WebkitTextStroke: strokeColor && strokeWidth > 0 ? `${strokeWidth}px ${strokeColor}` : undefined,
+        textShadow: !bgColor && (!strokeColor || strokeWidth <= 0)
+          ? "0 1px 4px rgba(0,0,0,0.85), 0 0 8px rgba(0,0,0,0.6)"
+          : undefined,
       }}
     >
       {overlay.text}

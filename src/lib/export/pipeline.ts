@@ -67,6 +67,38 @@ function mapQuality(q: ExportQuality) {
 }
 
 /**
+ * Helper to wrap text into multiple lines within maxWidth.
+ */
+function wrapTextToLines(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const paragraphs = text.split("\n");
+  const resultLines: string[] = [];
+
+  for (const para of paragraphs) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+
+    let currentLine = words[0];
+    for (let w = 1; w < words.length; w++) {
+      const testLine = `${currentLine} ${words[w]}`;
+      const width = typeof ctx.measureText === "function" ? ctx.measureText(testLine).width : testLine.length * 10;
+      if (width > maxWidth) {
+        resultLines.push(currentLine);
+        currentLine = words[w];
+      } else {
+        currentLine = testLine;
+      }
+    }
+    resultLines.push(currentLine);
+  }
+
+  return resultLines.length > 0 ? resultLines : [text];
+}
+
+/**
  * Renders a TextOverlay to canvas matching the CSS preview in TimelinePreview.
  */
 export function renderTextOverlayToCanvas(
@@ -82,23 +114,70 @@ export function renderTextOverlayToCanvas(
   // Scale font size proportionally to 720p base height
   const scale = canvasHeight / 720;
   const fontSize = Math.max(12, Math.round(overlay.fontSize * scale));
+  const fontWeight = overlay.fontWeight || (overlay.overlayType === "caption" ? 700 : 600);
 
-  ctx.font = `600 ${fontSize}px sans-serif`;
+  ctx.font = `${fontWeight} ${fontSize}px sans-serif`;
   ctx.fillStyle = overlay.color || "#ffffff";
   ctx.textAlign = overlay.align || "center";
   ctx.textBaseline = "middle";
 
-  // Text shadow matching preview: 0 1px 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6)
-  ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
-  ctx.shadowBlur = Math.round(6 * scale);
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = Math.round(2 * scale);
-
-  const lines = overlay.text.split("\n");
-  const lineHeight = fontSize * 1.3;
+  const maxTextWidth = canvasWidth * (overlay.boxWidthRatio || 0.85);
+  const lines = wrapTextToLines(ctx, overlay.text, maxTextWidth);
+  const lineHeight = fontSize * 1.35;
   const totalHeight = lines.length * lineHeight;
   const startY = py - totalHeight / 2 + lineHeight / 2;
 
+  // Render background box/pill if requested (typical for captions or bold presets)
+  const isCaption = overlay.overlayType === "caption";
+  const bgColor =
+    overlay.backgroundColor ||
+    (overlay.preset === "bold" || isCaption ? "rgba(0, 0, 0, 0.82)" : undefined);
+
+  if (bgColor) {
+    ctx.save();
+    let maxLineWidth = 0;
+    for (const line of lines) {
+      const w = ctx.measureText(line).width;
+      if (w > maxLineWidth) maxLineWidth = w;
+    }
+
+    const padX = Math.round(16 * scale);
+    const padY = Math.round(10 * scale);
+    const boxW = maxLineWidth + padX * 2;
+    const boxH = totalHeight + padY * 2;
+    const boxX = px - (overlay.align === "left" ? 0 : overlay.align === "right" ? boxW : boxW / 2);
+    const boxY = py - totalHeight / 2 - padY;
+    const radius = Math.round(8 * scale);
+
+    ctx.fillStyle = bgColor;
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, radius);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Text Stroke / Outline
+  const strokeColor = overlay.strokeColor || (overlay.preset === "minimal" ? "#000000" : undefined);
+  const strokeWidth = (overlay.strokeWidth || (strokeColor ? 2 : 0)) * scale;
+
+  if (strokeColor && strokeWidth > 0) {
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = strokeWidth;
+    ctx.lineJoin = "round";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.strokeText(lines[i], px, startY + i * lineHeight);
+    }
+  }
+
+  // Text shadow matching preview: 0 1px 4px rgba(0,0,0,0.8), 0 0 8px rgba(0,0,0,0.6)
+  if (!bgColor && (!strokeColor || strokeWidth <= 0)) {
+    ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+    ctx.shadowBlur = Math.round(6 * scale);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = Math.round(2 * scale);
+  }
+
+  // Text Fill
   for (let i = 0; i < lines.length; i++) {
     ctx.fillText(lines[i], px, startY + i * lineHeight);
   }

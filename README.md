@@ -30,12 +30,12 @@ Content Studio lets creators import their own videos, organize multi-track timel
 | **Media Relinking & Fingerprints** | ✅ Implemented | Missing/offline source detection, bounded SHA-256 head/tail fingerprinting, metadata change warnings, and automated re-inspection upon relinking. |
 | **Media Inspection & Preview** | ✅ Implemented | Mediabunny stream inspection (container, tracks, dimensions, duration, orientation, CFR/VFR detection) and HTMLMediaElement native preview playback with strict object URL revocation. |
 | **Multi-track Timeline Editor** | ✅ Implemented | Multi-track video and audio tracks, clip trimming (`sourceIn`/`sourceOut`), split at playhead (`S`), clip drag-and-drop, magnet snapping, zoom (20–500 px/s), and bounded undo/redo (50 states). |
-| **Text & Caption Overlays** | ✅ Implemented | Positionable, styled text overlays with proportional canvas rendering and preview parity. |
+| **Text & Caption Overlays** | ✅ Implemented | Positionable, styled text overlays and timed short-form captions with line-wrapping, bounding background pills, stroke outlines, and 1:1 preview/export parity. |
 | **Local Rendering Pipeline** | ✅ Implemented | Pure integer microsecond render planning, frame-by-frame canvas compositing, 1-second bounded chunk audio mixing, backpressure-controlled WebCodecs encoding, and staged progressive writing. |
-| **Export Formats & Validation** | ✅ Implemented | MP4 (H.264 + AAC) default, WebM (VP9 + Opus) supported fallback. Post-render Mediabunny container and track validation. Safe cancellation cleans temporary files. |
+| **Export Formats & Validation** | ✅ Implemented | MP4 (H.264 + AAC) default, WebM (VP9 + Opus) supported fallback. Post-render Mediabunny container and track validation. In-app export preview player for direct playback of completed files. |
 | **Revisions & Output History** | ✅ Implemented | Bounded project snapshots (50 revisions), pre-restore safety checkpoints, export history persistence, and disk status verification. |
 | **Cache & Trash Management** | ✅ Implemented | Categorized cache inventory, active resource locking, safe dry-run cleanup, and reversible project trash. |
-| **Deterministic Repurposing** | ✅ Implemented | Local visual dynamics and audio signal analysis, candidate moment scoring, objective weighting (`highlights`, `educational`, `podcast`), sequence selection, and automated edit plan generation. |
+| **Content-Aware Repurposing** | ✅ Implemented | Genuine content-aware repurposing workflow: local SRT/VTT subtitle parsing, offline in-browser Whisper ASR (WebGPU/WASM), 100% full-duration coverage, content-derived excerpt lengths (no hard limits or 10s clamps), multi-moment selection from single sources, 5 context integrity dimensions (speech boundary, thought completeness, context sufficiency, standalone clarity, ending closure), soft duration guidance, zero whole-source fallback, and automated timeline caption generation. |
 
 ---
 
