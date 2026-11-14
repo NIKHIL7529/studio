@@ -42,6 +42,8 @@ import { ClipInspector } from "./editor/ClipInspector.tsx";
 import { ExportModal } from "./editor/ExportModal.tsx";
 import { ProjectRevisionsModal } from "./ProjectRevisionsModal.tsx";
 import { CacheManagerModal } from "./CacheManagerModal.tsx";
+import { RepurposeWorkflow } from "./repurpose/RepurposeWorkflow.tsx";
+import { createProjectRevision } from "../lib/projectRevisions.ts";
 import {
   Button,
   IconButton,
@@ -52,7 +54,7 @@ import {
   Modal,
 } from "@/components/ui";
 
-type EditorMode = "library" | "editor";
+type EditorMode = "library" | "editor" | "repurpose";
 
 interface ProjectWorkspaceProps {
   project: ProjectDocument;
@@ -218,6 +220,44 @@ export function ProjectWorkspace({
     setSelectedOverlayId(overlay.id);
     setSelectedClipId(null);
   }, [handleTimelineChange]);
+
+  const handleApplyRepurposedSequence = useCallback(
+    async (updatedTimeline: TimelineDocument, reason: string) => {
+      // 1. Create a revision checkpoint using Phase 6 persistence
+      try {
+        await createProjectRevision(workspaceHandle, docRef.current, reason, { force: true });
+      } catch (err) {
+        console.warn("Failed to create repurpose revision snapshot:", err);
+      }
+
+      // 2. Push to undo stack
+      undoStack.push(timelineRef.current);
+      setCanUndo(undoStack.canUndo());
+      setCanRedo(undoStack.canRedo());
+
+      // 3. Update timeline state and active document
+      setTimeline(updatedTimeline);
+      setCurrentTime(0);
+      setSelectedClipId(null);
+      setSelectedOverlayId(null);
+
+      const updatedDoc = {
+        ...docRef.current,
+        updatedAt: new Date().toISOString(),
+        timeline: updatedTimeline,
+        settings: {
+          ...docRef.current.settings,
+          targetAspectRatio: updatedTimeline.settings?.targetAspectRatio,
+        },
+      } as ProjectDocumentWithTimeline;
+
+      updateProject(updatedDoc);
+
+      // 4. Switch to timeline editor
+      setEditorMode("editor");
+    },
+    [undoStack, updateProject, workspaceHandle]
+  );
 
   // ─── Asset status resolution ────────────────────────────────────────────────
 
@@ -564,6 +604,21 @@ export function ProjectWorkspace({
           >
             Editor
           </button>
+          <button
+            onClick={() => setEditorMode("repurpose")}
+            className={`px-3 h-6 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${
+              editorMode === "repurpose"
+                ? "bg-cs-bg-active text-cs-text-primary"
+                : "text-cs-text-secondary hover:text-cs-text-primary"
+            }`}
+            title="Deterministic local video repurposing workflow"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2.5" stroke="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3" />
+              <line x1="19" y1="5" x2="19" y2="19" />
+            </svg>
+            <span>Repurpose</span>
+          </button>
         </div>
 
         {/* Right: Save state + Close */}
@@ -646,6 +701,15 @@ export function ProjectWorkspace({
           onRelink={handleStartRelink}
           onRemove={setAssetToRemove}
           onDismissImportError={() => setImportError(null)}
+        />
+      ) : editorMode === "repurpose" ? (
+        <RepurposeWorkflow
+          project={doc}
+          liveAssets={liveAssets}
+          workspaceHandle={workspaceHandle}
+          currentTimeline={timeline}
+          onApplyTimelineSequence={handleApplyRepurposedSequence}
+          onCloseWorkflow={() => setEditorMode("editor")}
         />
       ) : (
         <EditorMode
