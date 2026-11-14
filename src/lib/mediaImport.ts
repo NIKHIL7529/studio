@@ -333,6 +333,7 @@ export async function relinkAssetHandle(
     lastModified: newFile.lastModified,
     mediaType: inferMediaCategory(newFile.name, newFile.type),
     mimeType: newFile.type || asset.mimeType,
+    metadata: undefined, // Clear metadata so relinked file is freshly inspected
   };
 }
 

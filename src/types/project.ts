@@ -1,5 +1,5 @@
 /**
- * Project and workspace type definitions for Content Studio (Phase 2).
+ * Project and workspace type definitions for Content Studio (Phase 2, Phase 3 & Phase 4).
  *
  * Rules:
  * - Durable source of truth is the project.json file on disk.
@@ -7,6 +7,9 @@
  *   never raw file bytes, blobs, full filesystem paths, or signed URLs.
  * - Schema version is strictly 1 for the initial release.
  */
+
+import type { InspectedMediaMetadata, MediaInspectionResult } from "../lib/media/types.ts";
+import type { TimelineDocument } from "./timeline.ts";
 
 export interface ProjectSettings {
   /** Output aspect ratio preference (e.g. "16:9", "9:16", "1:1", "4:5") */
@@ -45,6 +48,12 @@ export interface ProjectAsset {
    * Never contains '..', leading slashes, or absolute drive paths.
    */
   sourceLocator?: string;
+
+  /**
+   * Persisted technical media metadata inspected by Mediabunny (Phase 3).
+   * Contains only stable JSON-serializable values (no live objects or URLs).
+   */
+  metadata?: InspectedMediaMetadata;
 }
 
 export interface ProjectDocument {
@@ -68,6 +77,13 @@ export interface ProjectDocument {
 
   /** Minimal project preferences */
   settings?: ProjectSettings;
+
+  /**
+   * Optional timeline document embedded in the project.
+   * Added in Phase 4; schemaVersion remains 1.
+   * Absent on projects created before Phase 4.
+   */
+  timeline?: TimelineDocument;
 }
 
 /**
@@ -99,6 +115,8 @@ export interface LiveAssetItem {
   status: AssetAccessStatus;
   file?: File;
   errorMessage?: string;
+  inspection?: MediaInspectionResult;
+  isInspecting?: boolean;
 }
 
 /**

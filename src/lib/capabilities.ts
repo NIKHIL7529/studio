@@ -278,3 +278,13 @@ export const CAPABILITY_OPTIONAL: Record<keyof Omit<CapabilitySnapshot, "isBrows
   indexedDb: false,
 };
 
+// Re-export granular WebCodecs capability detection
+export {
+  detectWebCodecsCapabilities,
+  checkVideoDecoderSupport,
+  checkAudioDecoderSupport,
+  checkVideoEncoderSupport,
+  checkAudioEncoderSupport,
+  checkAssetDecoderSupport,
+} from "./media/webcodecsCapabilities.ts";
+

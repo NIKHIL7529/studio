@@ -9,6 +9,9 @@
  */
 
 import type { ProjectDocument, ProjectAsset, MediaCategory } from "../types/project.ts";
+import type { TimelineDocument, TimelineTrack, TimelineClip, TextOverlay } from "../types/timeline.ts";
+import type { InspectedMediaMetadata, InspectedVideoTrack, InspectedAudioTrack } from "./media/types.ts";
+import { validateTimeline } from "./timeline/model.ts";
 
 export const CURRENT_SCHEMA_VERSION = 1;
 export const MAX_PROJECT_NAME_LENGTH = 100;
@@ -105,6 +108,8 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
     lastModified = obj.lastModified;
   }
 
+  const metadata = validateInspectedMetadata(obj.metadata);
+
   return {
     ok: true,
     data: {
@@ -116,8 +121,207 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
       lastModified,
       handleRefId: (obj.handleRefId as string).trim(),
       sourceLocator,
+      metadata,
     },
   };
+}
+
+/**
+ * Validates and sanitizes inspected media metadata for durable persistence in project.json.
+ * Ensures only primitive, valid technical values are stored (no live files, decoders, or URLs).
+ */
+export function validateInspectedMetadata(raw: unknown): InspectedMediaMetadata | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const obj = raw as Record<string, unknown>;
+
+  const videoTracks: InspectedVideoTrack[] = [];
+  if (Array.isArray(obj.videoTracks)) {
+    for (const t of obj.videoTracks) {
+      if (typeof t === "object" && t !== null) {
+        const tr = t as Record<string, unknown>;
+        videoTracks.push({
+          trackNumber: typeof tr.trackNumber === "number" ? tr.trackNumber : 1,
+          codec: typeof tr.codec === "string" ? tr.codec : null,
+          codecParameterString: typeof tr.codecParameterString === "string" ? tr.codecParameterString : null,
+          codedWidth: typeof tr.codedWidth === "number" && Number.isFinite(tr.codedWidth) ? tr.codedWidth : undefined,
+          codedHeight: typeof tr.codedHeight === "number" && Number.isFinite(tr.codedHeight) ? tr.codedHeight : undefined,
+          displayWidth: typeof tr.displayWidth === "number" && Number.isFinite(tr.displayWidth) ? tr.displayWidth : undefined,
+          displayHeight: typeof tr.displayHeight === "number" && Number.isFinite(tr.displayHeight) ? tr.displayHeight : undefined,
+          rotation: typeof tr.rotation === "number" && Number.isFinite(tr.rotation) ? tr.rotation : undefined,
+          frameRate: typeof tr.frameRate === "number" && Number.isFinite(tr.frameRate) ? tr.frameRate : undefined,
+          isConstantFrameRate: typeof tr.isConstantFrameRate === "boolean" ? tr.isConstantFrameRate : undefined,
+        });
+      }
+    }
+  }
+
+  const audioTracks: InspectedAudioTrack[] = [];
+  if (Array.isArray(obj.audioTracks)) {
+    for (const t of obj.audioTracks) {
+      if (typeof t === "object" && t !== null) {
+        const tr = t as Record<string, unknown>;
+        audioTracks.push({
+          trackNumber: typeof tr.trackNumber === "number" ? tr.trackNumber : 1,
+          codec: typeof tr.codec === "string" ? tr.codec : null,
+          codecParameterString: typeof tr.codecParameterString === "string" ? tr.codecParameterString : null,
+          numberOfChannels: typeof tr.numberOfChannels === "number" && Number.isFinite(tr.numberOfChannels) ? tr.numberOfChannels : undefined,
+          sampleRate: typeof tr.sampleRate === "number" && Number.isFinite(tr.sampleRate) ? tr.sampleRate : undefined,
+        });
+      }
+    }
+  }
+
+  return {
+    containerFormat: typeof obj.containerFormat === "string" ? obj.containerFormat : undefined,
+    mimeType: typeof obj.mimeType === "string" ? obj.mimeType : undefined,
+    duration: typeof obj.duration === "number" && Number.isFinite(obj.duration) && obj.duration >= 0 ? obj.duration : undefined,
+    videoTracks,
+    audioTracks,
+    displayWidth: typeof obj.displayWidth === "number" && Number.isFinite(obj.displayWidth) ? obj.displayWidth : undefined,
+    displayHeight: typeof obj.displayHeight === "number" && Number.isFinite(obj.displayHeight) ? obj.displayHeight : undefined,
+    codedWidth: typeof obj.codedWidth === "number" && Number.isFinite(obj.codedWidth) ? obj.codedWidth : undefined,
+    codedHeight: typeof obj.codedHeight === "number" && Number.isFinite(obj.codedHeight) ? obj.codedHeight : undefined,
+    rotation: typeof obj.rotation === "number" && Number.isFinite(obj.rotation) ? obj.rotation : undefined,
+    frameRate: typeof obj.frameRate === "number" && Number.isFinite(obj.frameRate) ? obj.frameRate : undefined,
+    isConstantFrameRate: typeof obj.isConstantFrameRate === "boolean" ? obj.isConstantFrameRate : undefined,
+    sampleRate: typeof obj.sampleRate === "number" && Number.isFinite(obj.sampleRate) ? obj.sampleRate : undefined,
+    numberOfChannels: typeof obj.numberOfChannels === "number" && Number.isFinite(obj.numberOfChannels) ? obj.numberOfChannels : undefined,
+    inspectedAt: typeof obj.inspectedAt === "string" ? obj.inspectedAt : new Date().toISOString(),
+  };
+}
+
+/**
+ * Validates and sanitizes a TimelineDocument from untrusted JSON.
+ */
+export function validateTimelineDocument(raw: unknown): { ok: true; data: TimelineDocument } | { ok: false; error: string } {
+  if (typeof raw !== "object" || raw === null) {
+    return { ok: false, error: "Timeline must be an object." };
+  }
+  const obj = raw as Record<string, unknown>;
+  if (!isValidUuid(obj.id)) {
+    return { ok: false, error: `Invalid timeline UUID: ${String(obj.id)}` };
+  }
+  if (!Array.isArray(obj.tracks)) {
+    return { ok: false, error: "Timeline tracks must be an array." };
+  }
+  const tracks: TimelineTrack[] = [];
+  for (let i = 0; i < obj.tracks.length; i++) {
+    const t = obj.tracks[i];
+    if (typeof t !== "object" || t === null) {
+      return { ok: false, error: `Track at index ${i} is invalid.` };
+    }
+    const tr = t as Record<string, unknown>;
+    if (!isValidUuid(tr.id)) {
+      return { ok: false, error: `Invalid track UUID at index ${i}: ${String(tr.id)}` };
+    }
+    if (tr.type !== "video" && tr.type !== "audio") {
+      return { ok: false, error: `Invalid track type "${String(tr.type)}" at index ${i}. Must be "video" or "audio".` };
+    }
+    if (typeof tr.name !== "string" || tr.name.trim().length === 0) {
+      return { ok: false, error: `Track at index ${i} must have a non-empty name.` };
+    }
+    if (!Array.isArray(tr.clips)) {
+      return { ok: false, error: `Track "${tr.name}" clips must be an array.` };
+    }
+    const clips: TimelineClip[] = [];
+    for (let j = 0; j < tr.clips.length; j++) {
+      const c = tr.clips[j];
+      if (typeof c !== "object" || c === null) {
+        return { ok: false, error: `Clip at index ${j} in track "${tr.name}" is invalid.` };
+      }
+      const cl = c as Record<string, unknown>;
+      if (!isValidUuid(cl.id)) {
+        return { ok: false, error: `Invalid clip UUID: ${String(cl.id)}` };
+      }
+      if (!isValidUuid(cl.assetId)) {
+        return { ok: false, error: `Invalid clip assetId: ${String(cl.assetId)}` };
+      }
+      if (!isValidUuid(cl.trackId)) {
+        return { ok: false, error: `Invalid clip trackId: ${String(cl.trackId)}` };
+      }
+      const startTime = typeof cl.startTime === "number" && Number.isFinite(cl.startTime) ? cl.startTime : -1;
+      const sourceIn = typeof cl.sourceIn === "number" && Number.isFinite(cl.sourceIn) ? cl.sourceIn : -1;
+      const sourceOut = typeof cl.sourceOut === "number" && Number.isFinite(cl.sourceOut) ? cl.sourceOut : -1;
+      const volume = typeof cl.volume === "number" && Number.isFinite(cl.volume) ? Math.max(0, Math.min(1, cl.volume)) : 1;
+      const muted = typeof cl.muted === "boolean" ? cl.muted : false;
+
+      clips.push({
+        id: (cl.id as string).trim(),
+        assetId: (cl.assetId as string).trim(),
+        trackId: (cl.trackId as string).trim(),
+        startTime,
+        sourceIn,
+        sourceOut,
+        volume,
+        muted,
+      });
+    }
+
+    tracks.push({
+      id: (tr.id as string).trim(),
+      type: tr.type as "video" | "audio",
+      name: (tr.name as string).trim(),
+      order: typeof tr.order === "number" && Number.isFinite(tr.order) ? tr.order : i,
+      muted: typeof tr.muted === "boolean" ? tr.muted : false,
+      clips,
+    });
+  }
+
+  const textOverlays: TextOverlay[] = [];
+  if (Array.isArray(obj.textOverlays)) {
+    for (let k = 0; k < obj.textOverlays.length; k++) {
+      const o = obj.textOverlays[k];
+      if (typeof o !== "object" || o === null) {
+        return { ok: false, error: `Text overlay at index ${k} is invalid.` };
+      }
+      const ov = o as Record<string, unknown>;
+      if (!isValidUuid(ov.id)) {
+        return { ok: false, error: `Invalid text overlay UUID: ${String(ov.id)}` };
+      }
+      const startTime = typeof ov.startTime === "number" && Number.isFinite(ov.startTime) ? ov.startTime : 0;
+      const endTime = typeof ov.endTime === "number" && Number.isFinite(ov.endTime) ? ov.endTime : 0;
+      const x = typeof ov.x === "number" && Number.isFinite(ov.x) ? Math.max(0, Math.min(1, ov.x)) : 0.1;
+      const y = typeof ov.y === "number" && Number.isFinite(ov.y) ? Math.max(0, Math.min(1, ov.y)) : 0.8;
+      const fontSize = typeof ov.fontSize === "number" && Number.isFinite(ov.fontSize) ? Math.max(8, Math.min(200, ov.fontSize)) : 32;
+      const color = typeof ov.color === "string" && ov.color.trim().length > 0 ? ov.color.trim() : "#ffffff";
+      const align = ov.align === "left" || ov.align === "right" ? ov.align : "center";
+
+      textOverlays.push({
+        id: (ov.id as string).trim(),
+        text: typeof ov.text === "string" ? ov.text : "",
+        startTime,
+        endTime,
+        x,
+        y,
+        fontSize,
+        color,
+        align,
+      });
+    }
+  }
+
+  let settings: TimelineDocument["settings"] = {};
+  if (typeof obj.settings === "object" && obj.settings !== null) {
+    const rawSet = obj.settings as Record<string, unknown>;
+    const allowedRatios = ["16:9", "9:16", "1:1", "4:5"] as const;
+    if (typeof rawSet.targetAspectRatio === "string" && allowedRatios.includes(rawSet.targetAspectRatio as typeof allowedRatios[number])) {
+      settings = { targetAspectRatio: rawSet.targetAspectRatio as typeof allowedRatios[number] };
+    }
+  }
+
+  const timelineDoc: TimelineDocument = {
+    id: (obj.id as string).trim(),
+    tracks,
+    textOverlays,
+    settings,
+  };
+
+  const modelErrors = validateTimeline(timelineDoc);
+  if (modelErrors.length > 0) {
+    return { ok: false, error: `Invalid timeline: ${modelErrors.join("; ")}` };
+  }
+
+  return { ok: true, data: timelineDoc };
 }
 
 /**
@@ -185,6 +389,15 @@ export function validateProjectDocument(
     }
   }
 
+  let timeline: TimelineDocument | undefined = undefined;
+  if (obj.timeline !== undefined) {
+    const timelineRes = validateTimelineDocument(obj.timeline);
+    if (!timelineRes.ok) {
+      return { ok: false, error: `Project timeline is invalid: ${timelineRes.error}` };
+    }
+    timeline = timelineRes.data;
+  }
+
   return {
     ok: true,
     data: {
@@ -195,6 +408,7 @@ export function validateProjectDocument(
       updatedAt: (obj.updatedAt as string).trim(),
       assets: validatedAssets,
       settings,
+      timeline,
     },
   };
 }
