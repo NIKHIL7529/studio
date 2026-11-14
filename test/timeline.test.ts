@@ -483,12 +483,11 @@ describe("getActiveTextOverlaysAtTime", () => {
     return { tl, o1, o2, o3 };
   }
 
-  it("returns overlapping overlays at time=4", () => {
-    const { tl, o1, o2 } = buildOverlayTimeline();
+  it("enforces single text overlay at time=4 (no multiple overlapping overlays)", () => {
+    const { tl, o2 } = buildOverlayTimeline();
     const result = getActiveTextOverlaysAtTime(tl, 4);
-    assert.equal(result.length, 2);
-    assert.ok(result.some((o) => o.id === o1.id));
-    assert.ok(result.some((o) => o.id === o2.id));
+    assert.equal(result.length, 1);
+    assert.equal(result[0].id, o2.id);
   });
 
   it("includes startTime (inclusive)", () => {
@@ -843,6 +842,37 @@ describe("TimelineUndoStack", () => {
     const r3 = stack.redo()!;
     assert.equal(r3.id, tl2.id);
     assert.equal(stack.canRedo(), true);
+  });
+
+  it("seeds with initial timeline document and allows single-edit undo/redo", () => {
+    const initial = makeTimeline();
+    const stack = new TimelineUndoStack(initial);
+
+    assert.equal(stack.size, 1);
+    assert.equal(stack.canUndo(), false);
+    assert.equal(stack.canRedo(), false);
+
+    // Apply 1st edit
+    const edit1 = makeTimeline();
+    stack.push(edit1);
+
+    assert.equal(stack.size, 2);
+    assert.equal(stack.canUndo(), true);
+    assert.equal(stack.canRedo(), false);
+
+    // Undo 1st edit
+    const restored = stack.undo();
+    assert.ok(restored);
+    assert.equal(restored.id, initial.id);
+    assert.equal(stack.canUndo(), false);
+    assert.equal(stack.canRedo(), true);
+
+    // Redo 1st edit
+    const redone = stack.redo();
+    assert.ok(redone);
+    assert.equal(redone.id, edit1.id);
+    assert.equal(stack.canUndo(), true);
+    assert.equal(stack.canRedo(), false);
   });
 });
 

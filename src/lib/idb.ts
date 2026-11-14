@@ -1,5 +1,5 @@
 /**
- * Minimal typed IndexedDB wrapper for Content Studio (Phase 2).
+ * Minimal typed IndexedDB wrapper for Content Studio.
  *
  * Rules:
  * - Stores ONLY FileSystemDirectoryHandle (workspace) and FileSystemFileHandle

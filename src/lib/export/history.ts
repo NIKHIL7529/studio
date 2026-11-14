@@ -1,5 +1,5 @@
 /**
- * Export history and output lifecycle management (Phase 6).
+ * Export history and output lifecycle management.
  *
  * Rules:
  * - Completed outputs are stored in projects/<projectId>/exports/

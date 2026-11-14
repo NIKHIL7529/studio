@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CandidatePreviewPlayer — In-place preview player for candidate moments (Phase 7).
+ * CandidatePreviewPlayer — In-place preview player for candidate moments.
  *
  * Rules:
  * - Plays the exact candidate interval [sourceIn, sourceOut].

@@ -1,5 +1,5 @@
 /**
- * Local cache inventory and lifecycle management (Phase 6).
+ * Local cache inventory and lifecycle management.
  *
  * Distinguishes 5 storage categories:
  * 1. Original source media: User-owned files at original locations. NEVER treated as cache.

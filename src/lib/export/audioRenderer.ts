@@ -1,5 +1,5 @@
 /**
- * Sample-Driven Continuous Audio Renderer for Content Studio (Phase 8 Correction).
+ * Sample-Driven Continuous Audio Renderer for Content Studio.
  *
  * Rules:
  * - Completely decoupled from the video frame loop.

@@ -34,13 +34,8 @@ function TopBar() {
         </span>
       </div>
 
-      {/* Right: placeholder for future global controls */}
+      {/* Right: global controls */}
       <nav aria-label="Application navigation" className="flex items-center gap-1">
-        {/*
-          Phase 1: No real navigation controls exist yet.
-          The nav element is present for accessibility/landmark purposes.
-          Controls will be added as features are implemented in later phases.
-        */}
       </nav>
     </header>
   );
@@ -59,7 +54,7 @@ function StatusBar() {
       ].join(" ")}
       role="contentinfo"
     >
-      <span className="text-[11px] text-cs-text-tertiary">Phase 2 — Workspace & Local Persistence</span>
+      <span className="text-[11px] text-cs-text-tertiary">Local-First Video Editor</span>
       <span className="text-[11px] text-cs-text-tertiary">Content Studio 0.1.0</span>
     </footer>
   );

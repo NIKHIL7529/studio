@@ -1,5 +1,5 @@
 /**
- * Workspace trash and safe project deletion management (Phase 6).
+ * Workspace trash and safe project deletion management.
  *
  * Rules:
  * - Deleting an active project moves it to <workspace>/trash/<projectId>/ (recoverable).

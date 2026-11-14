@@ -1,5 +1,5 @@
 /**
- * Workspace filesystem operations for Content Studio (Phase 2).
+ * Workspace filesystem operations for Content Studio.
  *
  * Layout:
  * <workspace>/

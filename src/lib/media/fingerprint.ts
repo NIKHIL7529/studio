@@ -1,5 +1,5 @@
 /**
- * Fast, bounded media fingerprinting for Content Studio (Phase 6).
+ * Fast, bounded media fingerprinting for Content Studio.
  *
  * Rules:
  * - Computes a deterministic SHA-256 fingerprint from head/tail slices and file metadata.

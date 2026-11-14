@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CacheManagerModal — Local cache inventory and safe cleanup (Phase 6).
+ * CacheManagerModal — Local cache inventory and safe cleanup.
  *
  * Rules:
  * - Shows cache usage categorized into derived assets, temporary processing files, and orphaned files.

@@ -1,5 +1,5 @@
 /**
- * Deterministic scoring and ranking engine for candidate moments (Phase 7 & 8).
+ * Deterministic scoring and ranking engine for candidate moments.
  *
  * Rules:
  * - 100% deterministic, explainable scoring across transparent dimensions.

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CandidateCard — Displays a discovered repurpose candidate moment (Phase 7 & 8).
+ * CandidateCard — Displays a discovered repurpose candidate moment.
  *
  * Shows:
  * - Source name, time range (start - end), variable duration.
@@ -150,7 +150,7 @@ export function CandidateCard({
         </div>
       </div>
 
-      {/* Context Assessment Badges (Phase 8) */}
+      {/* Context Assessment Badges */}
       {hasTranscriptEvidence && (
         <div className="mt-2.5 pt-2 border-t border-cs-border-subtle flex items-center gap-1.5 flex-wrap text-[10px]">
           {thoughtCompleteness && (

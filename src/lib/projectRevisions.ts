@@ -1,5 +1,5 @@
 /**
- * Project revisions lifecycle and snapshot management (Phase 6).
+ * Project revisions lifecycle and snapshot management.
  *
  * Rules:
  * - All revisions are stored inside the project folder: projects/<id>/revisions/

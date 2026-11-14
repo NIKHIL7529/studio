@@ -1,5 +1,5 @@
 /**
- * Type definitions for Content Studio Repurposing Workflow (Phase 7 & 8).
+ * Type definitions for Content Studio Repurposing Workflow.
  *
  * Rules:
  * - 100% local-first in-browser processing.
@@ -156,7 +156,7 @@ export interface RepurposeCandidate {
   selected: boolean;
   cacheKey: string;
 
-  // ── Context Integrity and Speech Dimensions (Phase 8) ─────────────────────
+  // ── Context Integrity and Speech Dimensions ─────────────────────
   hasTranscriptEvidence?: boolean;
   transcriptSnippet?: string;
   precedingContextText?: string;

@@ -297,14 +297,72 @@ export function duplicateClip(
 
 // ─── Text overlay operations ─────────────────────────────────────────────────
 
-/** Adds a text overlay. Returns a new TimelineDocument. */
+/**
+ * Ensures that across the timeline, at any point in time there is at most
+ * ONE text overlay active. If overlays collide or overlap, their boundaries
+ * are adjusted or resolved so intervals are strictly non-overlapping.
+ */
+export function resolveTextOverlayCollisions(overlays: TextOverlay[]): TextOverlay[] {
+  if (overlays.length <= 1) return overlays;
+
+  // Sort primarily by startTime, secondary by text/non-caption priority, then id
+  const sorted = [...overlays].sort((a, b) => {
+    if (Math.abs(a.startTime - b.startTime) > 0.001) {
+      return a.startTime - b.startTime;
+    }
+    if (a.overlayType !== b.overlayType) {
+      return a.overlayType === "title" ? -1 : 1;
+    }
+    return a.id.localeCompare(b.id);
+  });
+
+  const resolved: TextOverlay[] = [];
+
+  for (const current of sorted) {
+    if (current.endTime <= current.startTime) continue;
+
+    if (resolved.length === 0) {
+      resolved.push({ ...current });
+      continue;
+    }
+
+    const prev = resolved[resolved.length - 1];
+
+    if (current.startTime < prev.endTime) {
+      // Overlap detected!
+      if (current.startTime <= prev.startTime + 0.01) {
+        // Virtually same start time: keep the current one (higher priority)
+        resolved[resolved.length - 1] = {
+          ...current,
+          endTime: Math.max(prev.endTime, current.endTime),
+        };
+      } else {
+        // Truncate previous overlay so it ends exactly where current begins
+        const newPrevEnd = Number(current.startTime.toFixed(2));
+        if (newPrevEnd > prev.startTime + 0.05) {
+          prev.endTime = newPrevEnd;
+          resolved.push({ ...current });
+        } else {
+          // Previous was too short after truncation; replace with current
+          resolved[resolved.length - 1] = { ...current };
+        }
+      }
+    } else {
+      resolved.push({ ...current });
+    }
+  }
+
+  return resolved;
+}
+
+/** Adds a text overlay. Ensures non-overlapping invariant across timeline. */
 export function addTextOverlay(
   timeline: TimelineDocument,
   overlay: TextOverlay,
 ): TimelineDocument {
   return {
     ...timeline,
-    textOverlays: [...timeline.textOverlays, overlay],
+    textOverlays: resolveTextOverlayCollisions([...timeline.textOverlays, overlay]),
   };
 }
 
@@ -328,11 +386,12 @@ export function updateTextOverlay(
   overlayId: string,
   patch: Partial<Omit<TextOverlay, "id">>,
 ): TimelineDocument {
+  const updated = timeline.textOverlays.map((o) =>
+    o.id === overlayId ? { ...o, ...patch } : o,
+  );
   return {
     ...timeline,
-    textOverlays: timeline.textOverlays.map((o) =>
-      o.id === overlayId ? { ...o, ...patch } : o,
-    ),
+    textOverlays: resolveTextOverlayCollisions(updated),
   };
 }
 
@@ -346,11 +405,12 @@ export function moveTextOverlay(
   startTime: number,
   endTime: number,
 ): TimelineDocument {
+  const updated = timeline.textOverlays.map((o) =>
+    o.id === overlayId ? { ...o, startTime, endTime } : o,
+  );
   return {
     ...timeline,
-    textOverlays: timeline.textOverlays.map((o) =>
-      o.id === overlayId ? { ...o, startTime, endTime } : o,
-    ),
+    textOverlays: resolveTextOverlayCollisions(updated),
   };
 }
 
@@ -378,16 +438,17 @@ export function getActiveClipAtTime(
 }
 
 /**
- * Returns all text overlays active at the given timeline time.
- * An overlay is active when startTime <= time < endTime.
+ * Returns active text overlay at the given timeline time.
+ * Invariant: at any particular moment or second, at most a single text overlay is active.
  */
 export function getActiveTextOverlaysAtTime(
   timeline: TimelineDocument,
   time: number,
 ): TextOverlay[] {
-  return timeline.textOverlays.filter(
+  const active = timeline.textOverlays.filter(
     (o) => time >= o.startTime && time < o.endTime,
   );
+  return active.slice(0, 1);
 }
 
 /**

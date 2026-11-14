@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ExportModal — Export configuration, capability preflight, and render progress dialog (Phase 5).
+ * ExportModal — Export configuration, capability preflight, and render progress dialog.
  *
  * Rules:
  * - Runtime capability preflight checks actual WebCodecs support before starting.

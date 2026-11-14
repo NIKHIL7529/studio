@@ -1,5 +1,5 @@
 /**
- * Export and rendering type definitions for Content Studio (Phase 5).
+ * Export and rendering type definitions for Content Studio.
  *
  * Rules:
  * - All persistent records stored in project.json match ProjectExport in project.ts.

@@ -1,5 +1,5 @@
 /**
- * Runtime capability detection for local video export (Phase 5).
+ * Runtime capability detection for local video export.
  *
  * Rules:
  * - Codec support is validated strictly through VideoEncoder.isConfigSupported()

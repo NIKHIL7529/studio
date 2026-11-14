@@ -1,5 +1,5 @@
 /**
- * Repurposing execution pipeline coordinator (Phase 7 & 8).
+ * Repurposing execution pipeline coordinator.
  *
  * Rules:
  * - Genuine content-aware repurposing: accepts user brief, deliverable goals, local transcripts.

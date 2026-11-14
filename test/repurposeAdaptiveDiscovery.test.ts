@@ -6,7 +6,7 @@ import { selectCandidateSequence } from "../src/lib/repurpose/sequenceSelector.t
 import type { SourceAnalysisResult, RepurposeConfig } from "../src/types/repurpose.ts";
 import type { SourceTranscript } from "../src/types/transcription.ts";
 
-describe("Adaptive Content-Aware Repurposing (Phase 8 Editorial Rules)", () => {
+describe("Adaptive Content-Aware Repurposing (Editorial Rules)", () => {
   const mockTranscript: SourceTranscript = {
     sourceAssetId: "asset-1",
     sourceAssetName: "long-keynote.mp4",

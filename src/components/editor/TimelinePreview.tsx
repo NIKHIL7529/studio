@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * TimelinePreview — Timeline Composition Preview panel (Phase 4, 7 & 8).
+ * TimelinePreview — Timeline Composition Preview panel.
  *
  * Rules:
  * - Real timeline composition preview: synchronizes playhead, active clips, and timed captions.
@@ -402,14 +402,31 @@ export function TimelinePreview({
           </div>
         )}
 
-        {/* Synchronized Text Overlays & Timed Captions */}
-        {activeOverlays.map((overlay) => (
+        {/* Synchronized Text Overlays & Timed Captions (Single overlay at any moment) */}
+        {activeOverlays.slice(0, 1).map((overlay) => (
           <TextOverlayRenderer key={overlay.id} overlay={overlay} />
         ))}
       </div>
 
       {/* Playback Controls & Status Bar */}
-      <div className="shrink-0 flex items-center gap-3 px-3 py-2 bg-cs-bg-surface border-t border-cs-border-subtle">
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 bg-cs-bg-surface border-t border-cs-border-subtle">
+        {/* Replay / Jump to Start */}
+        <button
+          onClick={() => {
+            onPlaybackTimeUpdate(0);
+            if (!isPlaying) onPlayPause();
+          }}
+          className="w-7 h-7 flex items-center justify-center rounded bg-cs-bg-elevated hover:bg-cs-bg-base text-cs-text-secondary hover:text-cs-text-primary transition-colors shrink-0"
+          aria-label="Replay from start"
+          title="Replay from start (Home)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+          </svg>
+        </button>
+
+        {/* Play / Pause */}
         <button
           onClick={onPlayPause}
           className="w-7 h-7 flex items-center justify-center rounded bg-cs-accent hover:bg-cs-accent-hover text-white transition-colors shrink-0"
@@ -445,7 +462,7 @@ export function TimelinePreview({
         {/* Active captions / overlays count */}
         {activeOverlays.length > 0 && (
           <span className="ml-auto shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-cs-accent/15 text-cs-accent font-medium">
-            {activeOverlays.length} active overlay{activeOverlays.length > 1 ? "s" : ""}
+            1 active overlay
           </span>
         )}
       </div>

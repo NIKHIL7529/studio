@@ -1,5 +1,5 @@
 /**
- * Bounded asynchronous inspection queue with cancellation and stale result protection (Phase 3).
+ * Bounded asynchronous inspection queue with cancellation and stale result protection.
  *
  * Rules:
  * - Bounds concurrency (default 1) to prevent starving browser I/O or preview playback.

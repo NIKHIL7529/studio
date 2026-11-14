@@ -79,7 +79,7 @@ describe("Project Export Persistence & Schema 1 Validation", () => {
     const legacyProject: ProjectDocument = {
       schemaVersion: 1,
       id: "a0000000-0000-4000-8000-000000000001",
-      name: "Legacy Phase 4 Project",
+      name: "Legacy Project",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       assets: [],

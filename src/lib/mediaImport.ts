@@ -1,11 +1,11 @@
 /**
- * Media import, handle persistence, and source-file relinking for Content Studio (Phase 2).
+ * Media import, handle persistence, and source-file relinking for Content Studio.
  *
  * Rules:
  * - Media files are NEVER copied into the workspace, IndexedDB, or OPFS.
  * - Handles are persisted in IndexedDB; project documents reference them via opaque handleRefId.
  * - Inspects only basic File metadata (name, size, lastModified, MIME hint).
- * - Codec, duration, and thumbnail generation belong to later phases.
+ * - Codec, duration, and thumbnail generation belong to the media inspection queue.
  * - Removing an asset removes the reference, never the original file.
  */
 

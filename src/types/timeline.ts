@@ -1,5 +1,5 @@
 /**
- * Timeline domain types for Content Studio (Phase 4, 7 & 8).
+ * Timeline domain types for Content Studio.
  *
  * Rules:
  * - Timestamps are in seconds as non-negative floating-point numbers.
@@ -55,7 +55,7 @@ export interface TextOverlay {
   color: string;
   align: "left" | "center" | "right";
 
-  // ── Caption & Spoken Word Styling (Phase 8) ──────────────────────────────
+  // ── Caption & Spoken Word Styling ──────────────────────────────
   /** Distinct overlay role: "title" headline vs timed "caption" */
   overlayType?: TextOverlayType;
   /** Caption visual styling preset */

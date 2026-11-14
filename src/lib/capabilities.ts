@@ -9,7 +9,7 @@
  *   Components and during SSR — results will simply reflect the absence of
  *   browser APIs.
  * - Codec support is NOT inferred from the presence of WebCodecs classes.
- *   Detailed codec capability checks belong to the media-engine phase.
+ *   Detailed codec capability checks belong to the media engine.
  */
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ export interface CapabilitySnapshot {
   /**
    * WebCodecs API — VideoDecoder, VideoEncoder, AudioDecoder, AudioEncoder.
    * Required for local media decoding and encoding. Codec-level support is
-   * NOT tested here; that belongs to the media engine phase.
+   * tested by the media engine.
    */
   webCodecs: CapabilityEntry;
 

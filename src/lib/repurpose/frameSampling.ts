@@ -1,5 +1,5 @@
 /**
- * Deterministic frame sampling and scene-change proxy detection (Phase 7).
+ * Deterministic frame sampling and scene-change proxy detection.
  *
  * Rules:
  * - 100% deterministic, local-first in-browser analysis.

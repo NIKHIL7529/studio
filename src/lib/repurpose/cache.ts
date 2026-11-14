@@ -1,13 +1,13 @@
 /**
- * Local cache persistence and lifecycle for repurposing analysis results (Phase 7).
+ * Local cache persistence and lifecycle for repurposing analysis results.
  *
  * Rules:
  * - Stores compact analysis metadata and candidate results inside projects/<id>/cache/repurpose/.
  * - Never persists decoded video frames or full audio buffers.
  * - Cache key incorporates asset ID, bounded fingerprint/size, and algorithm version.
  * - Invalidation is explicit when source metadata, fingerprint, or algorithm changes.
- * - Integrates with Phase 6 lockCacheResource / unlockCacheResource during active writes.
- * - Fully protected by Phase 6 cache boundaries: original media, documents, and exports are untouched.
+ * - Integrates with lockCacheResource / unlockCacheResource during active writes.
+ * - Fully protected by workspace cache boundaries: original media, documents, and exports are untouched.
  */
 
 import type { SourceAnalysisResult } from "../../types/repurpose.ts";

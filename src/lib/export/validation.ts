@@ -1,5 +1,5 @@
 /**
- * Local output validation for completed video exports (Phase 5).
+ * Local output validation for completed video exports.
  *
  * Rules:
  * - Validates container integrity, tracks, codecs, dimensions, and duration.

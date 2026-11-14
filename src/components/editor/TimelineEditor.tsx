@@ -82,14 +82,15 @@ function snapTime(time: number, snapTargets: number[], pxPerSec: number, altPres
 
 function TimelineRuler({
   pxPerSec,
-  scrollLeft,
-  viewWidth,
+  currentTime,
+  timelineWidth,
+  rulerAreaRef,
   onSeek,
 }: {
   pxPerSec: number;
-  scrollLeft: number;
-  viewWidth: number;
-  totalDuration?: number;
+  currentTime: number;
+  timelineWidth: number;
+  rulerAreaRef: React.RefObject<HTMLDivElement | null>;
   onSeek: (t: number) => void;
 }) {
   // Pick a sensible tick spacing
@@ -97,32 +98,50 @@ function TimelineRuler({
   const niceIntervals = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
   const tickInterval = niceIntervals.find((i) => i >= rawInterval) ?? 300;
 
-  const startTime = scrollLeft / pxPerSec;
-  const endTime = (scrollLeft + viewWidth) / pxPerSec;
+  const maxDuration = Math.max(1, timelineWidth / pxPerSec);
   const ticks: number[] = [];
 
-  const firstTick = Math.floor(startTime / tickInterval) * tickInterval;
-  for (let t = firstTick; t <= endTime + tickInterval; t += tickInterval) {
+  for (let t = 0; t <= maxDuration + tickInterval; t += tickInterval) {
     ticks.push(t);
   }
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const relX = e.clientX - rect.left + scrollLeft;
-    onSeek(Math.max(0, relX / pxPerSec));
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rulerEl = e.currentTarget;
+
+    const updateSeek = (clientX: number) => {
+      const rect = rulerEl.getBoundingClientRect();
+      const scrollOffset = rulerAreaRef.current?.scrollLeft ?? 0;
+      const relX = clientX - rect.left + scrollOffset;
+      onSeek(Math.max(0, relX / pxPerSec));
+    };
+
+    updateSeek(e.clientX);
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      updateSeek(moveEvent.clientX);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
   };
 
   return (
     <div
-      className="relative bg-cs-bg-elevated border-b border-cs-border-subtle cursor-pointer select-none overflow-hidden shrink-0"
-      style={{ height: RULER_HEIGHT }}
-      onClick={handleClick}
+      className="relative bg-cs-bg-elevated border-b border-cs-border-subtle cursor-ew-resize select-none overflow-hidden shrink-0"
+      style={{ height: RULER_HEIGHT, width: timelineWidth }}
+      onMouseDown={handleMouseDown}
     >
       {ticks.map((t) => {
-        const x = t * pxPerSec - scrollLeft;
+        const x = t * pxPerSec;
         const isMajor = t % (tickInterval * 5) < 0.001 || tickInterval >= 10;
         return (
-          <div key={t} className="absolute top-0 flex flex-col items-center" style={{ left: x }}>
+          <div key={t} className="absolute top-0 flex flex-col items-center pointer-events-none" style={{ left: x }}>
             <div
               className={`w-px ${isMajor ? "h-3 bg-cs-border-strong" : "h-2 bg-cs-border-default"}`}
             />
@@ -134,6 +153,22 @@ function TimelineRuler({
           </div>
         );
       })}
+
+      {/* Playhead pointer / arrow handle on the ruler */}
+      <div
+        className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center"
+        style={{ left: currentTime * pxPerSec, transform: "translateX(-50%)" }}
+      >
+        {/* Scrubber needle head */}
+        <div className="w-3.5 h-3.5 bg-cs-error rounded-t flex items-center justify-center shadow-md">
+          <div className="w-1 h-1 bg-white rounded-full" />
+        </div>
+        {/* Scrubber downward pointer triangle */}
+        <div
+          className="w-3.5 h-2.5 bg-cs-error shadow-sm"
+          style={{ clipPath: "polygon(0 0, 100% 0, 50% 100%)" }}
+        />
+      </div>
     </div>
   );
 }
@@ -282,15 +317,9 @@ function Playhead({
   const x = currentTime * pxPerSec;
   return (
     <div
-      className="absolute top-0 bottom-0 w-px bg-cs-error pointer-events-none z-30"
-      style={{ left: x, height: totalHeight }}
-    >
-      {/* Playhead head */}
-      <div
-        className="absolute -top-1 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 bg-cs-error"
-        style={{ clipPath: "polygon(50% 100%, 0 0, 100% 0)" }}
-      />
-    </div>
+      className="absolute top-0 bottom-0 w-0.5 bg-cs-error pointer-events-none z-30"
+      style={{ left: x, height: totalHeight, transform: "translateX(-50%)" }}
+    />
   );
 }
 
@@ -314,7 +343,6 @@ export function TimelineEditor({
   onRedo,
 }: TimelineEditorProps) {
   const [pxPerSec, setPxPerSec] = useState(ZOOM_DEFAULT);
-  const [scrollLeft, setScrollLeft] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const rulerAreaRef = useRef<HTMLDivElement>(null);
   const [viewWidth, setViewWidth] = useState(800);
@@ -334,7 +362,6 @@ export function TimelineEditor({
   // Sync scroll
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const sl = e.currentTarget.scrollLeft;
-    setScrollLeft(sl);
     if (rulerAreaRef.current) rulerAreaRef.current.scrollLeft = sl;
   }, []);
 
@@ -357,7 +384,22 @@ export function TimelineEditor({
 
       if (e.code === "Space") {
         e.preventDefault();
+        if (totalDuration > 0 && currentTime >= totalDuration - 0.05 && !isPlaying) {
+          onSeek(0);
+        }
         onPlayPause();
+        return;
+      }
+
+      if (e.code === "Home") {
+        e.preventDefault();
+        onSeek(0);
+        return;
+      }
+
+      if (e.code === "End") {
+        e.preventDefault();
+        onSeek(totalDuration);
         return;
       }
 
@@ -398,7 +440,7 @@ export function TimelineEditor({
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [timeline, selectedClipId, currentTime, onPlayPause, onTimelineChange, onSelectClip, onUndo, onRedo]);
+  }, [timeline, selectedClipId, currentTime, isPlaying, totalDuration, onPlayPause, onSeek, onTimelineChange, onSelectClip, onUndo, onRedo]);
 
   // Drag handlers
   const handleClipDragStart = useCallback((e: React.MouseEvent, clip: TimelineClip) => {
@@ -507,7 +549,12 @@ export function TimelineEditor({
 
         {/* Play / Pause */}
         <button
-          onClick={onPlayPause}
+          onClick={() => {
+            if (totalDuration > 0 && currentTime >= totalDuration - 0.05 && !isPlaying) {
+              onSeek(0);
+            }
+            onPlayPause();
+          }}
           className="w-7 h-7 flex items-center justify-center rounded bg-cs-accent hover:bg-cs-accent-hover text-white transition-colors shrink-0"
           aria-label={isPlaying ? "Pause" : "Play"}
           title={isPlaying ? "Pause (Space)" : "Play (Space)"}
@@ -523,6 +570,62 @@ export function TimelineEditor({
             </svg>
           )}
         </button>
+
+        {/* Replay / Jump to Start */}
+        <IconButton
+          label="Replay / Jump to start (Home)"
+          size="sm"
+          onClick={() => {
+            onSeek(0);
+            if (!isPlaying) onPlayPause();
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+          </svg>
+        </IconButton>
+
+        <div className="w-px h-5 bg-cs-border-subtle mx-1 shrink-0" />
+
+        {/* Split at playhead */}
+        <IconButton
+          label="Split selected clip at playhead (S)"
+          size="sm"
+          disabled={!selectedClipId}
+          onClick={() => {
+            if (selectedClipId) {
+              const result = splitClip(timeline, selectedClipId, currentTime);
+              if (result) {
+                onTimelineChange(result);
+                onSelectClip(null);
+              }
+            }
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+            <line x1="12" y1="2" x2="12" y2="22" strokeDasharray="3 3" />
+            <path d="M19 12H5" />
+          </svg>
+        </IconButton>
+
+        {/* Delete clip */}
+        <IconButton
+          label="Delete selected clip (Del)"
+          size="sm"
+          disabled={!selectedClipId}
+          onClick={() => {
+            if (selectedClipId) {
+              onTimelineChange(removeClip(timeline, selectedClipId));
+              onSelectClip(null);
+            }
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </IconButton>
 
         {/* Time display */}
         <span className="text-xs font-mono text-cs-text-primary tabular-nums shrink-0">
@@ -605,9 +708,9 @@ export function TimelineEditor({
             <div style={{ width: timelineWidth, position: "relative" }}>
               <TimelineRuler
                 pxPerSec={pxPerSec}
-                scrollLeft={scrollLeft}
-                viewWidth={viewWidth}
-                totalDuration={totalDuration}
+                currentTime={currentTime}
+                timelineWidth={timelineWidth}
+                rulerAreaRef={rulerAreaRef}
                 onSeek={handleRulerSeek}
               />
             </div>

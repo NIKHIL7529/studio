@@ -1,5 +1,5 @@
 /**
- * Progressive file writing and workspace destination management (Phase 5).
+ * Progressive file writing and workspace destination management.
  *
  * Rules:
  * - Uses FileSystemFileHandle.createWritable() to stream output chunks directly to disk.

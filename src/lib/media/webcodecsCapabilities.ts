@@ -1,5 +1,5 @@
 /**
- * WebCodecs runtime capability detection (Phase 3).
+ * WebCodecs runtime capability detection.
  *
  * Rules:
  * - Detects VideoDecoder, VideoEncoder, AudioDecoder, AudioEncoder independently.

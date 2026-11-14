@@ -1,5 +1,5 @@
 /**
- * Media engine types for Content Studio (Phase 3).
+ * Media engine types for Content Studio.
  *
  * Rules:
  * - Types capture only what Mediabunny or browser media APIs actually determine.

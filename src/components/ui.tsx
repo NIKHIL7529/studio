@@ -229,9 +229,8 @@ export function PanelHeader({ title, description, actions, className = "" }: Pan
   );
 }
 
-// ─── Tooltip (native title-based placeholder) ─────────────────────────────────
-// Phase 1 uses native `title` attributes. A custom tooltip component can be
-// added in a later phase if native tooltips prove insufficient.
+// ─── Tooltip ──────────────────────────────────────────────────────────────────
+// Antigravity UI components use native `title` and `aria-label` attributes for accessibility.
 
 // ─── StatusIndicator ─────────────────────────────────────────────────────────
 

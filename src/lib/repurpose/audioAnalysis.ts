@@ -1,5 +1,5 @@
 /**
- * Local deterministic audio signal analysis (Phase 7).
+ * Local deterministic audio signal analysis.
  *
  * Rules:
  * - 100% deterministic, local-first in-browser signal processing.

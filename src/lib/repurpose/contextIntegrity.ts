@@ -1,5 +1,5 @@
 /**
- * Context Integrity and Speech-Thought Analysis Engine (Phase 8).
+ * Context Integrity and Speech-Thought Analysis Engine.
  *
  * Rules:
  * - A grammatically complete sentence is NOT automatically context-complete.

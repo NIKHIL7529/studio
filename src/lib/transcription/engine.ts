@@ -1,5 +1,5 @@
 /**
- * Local on-device Speech-to-Text Transcription Engine (Phase 8).
+ * Local on-device Speech-to-Text Transcription Engine.
  *
  * Rules:
  * - 100% client-side: executes locally in browser Web Workers using WebGPU/WASM.

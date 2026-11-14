@@ -1,5 +1,5 @@
 /**
- * Project and workspace type definitions for Content Studio (Phase 2, Phase 3 & Phase 4).
+ * Project and workspace type definitions for Content Studio.
  *
  * Rules:
  * - Durable source of truth is the project.json file on disk.
@@ -50,20 +50,20 @@ export interface ProjectAsset {
   sourceLocator?: string;
 
   /**
-   * Persisted technical media metadata inspected by Mediabunny (Phase 3).
+   * Persisted technical media metadata inspected by Mediabunny.
    * Contains only stable JSON-serializable values (no live objects or URLs).
    */
   metadata?: InspectedMediaMetadata;
 
   /**
-   * Optional fast bounded content fingerprint (Phase 6) used to reliably
+   * Optional fast bounded content fingerprint used to reliably
    * detect file changes or verify replacement files during relinking.
    */
   fingerprint?: string;
 }
 
 /**
- * Metadata for a saved project document revision (Phase 6).
+ * Metadata for a saved project document revision.
  */
 export interface ProjectRevisionMetadata {
   /** Revision UUID */
@@ -114,15 +114,11 @@ export interface ProjectDocument {
 
   /**
    * Optional timeline document embedded in the project.
-   * Added in Phase 4; schemaVersion remains 1.
-   * Absent on projects created before Phase 4.
    */
   timeline?: TimelineDocument;
 
   /**
    * Optional registered exports for this project.
-   * Added in Phase 5; schemaVersion remains 1.
-   * Absent on projects created before Phase 5.
    */
   exports?: ProjectExport[];
 }

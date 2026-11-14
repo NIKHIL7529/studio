@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ProjectRevisionsModal — Project version history and recovery (Phase 6).
+ * ProjectRevisionsModal — Project version history and recovery.
  *
  * Rules:
  * - Allows creators to view historical project snapshots stored in projects/<id>/revisions/.

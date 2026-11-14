@@ -1,5 +1,5 @@
 /**
- * Adaptive candidate sequence selection (Phase 7 & 8).
+ * Adaptive candidate sequence selection.
  *
  * Rules:
  * - NO fixed candidate count (no hardcoded 3-result ceiling).

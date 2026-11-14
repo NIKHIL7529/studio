@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * ProjectWorkspace — The main workspace view when a project is open (Phase 4).
+ * ProjectWorkspace — The main workspace view when a project is open.
  *
- * Extends Phase 3 with a full editor layout:
- * - Mode toggle: "library" (Phase 3 browsing/preview) vs "editor" (timeline editor)
+ * Full editor layout:
+ * - Mode toggle: "library" (browsing/preview) vs "editor" (timeline editor) vs "repurpose"
  * - Editor mode: media library sidebar, timeline preview, clip inspector, timeline editor
- * - All Phase 3 functionality preserved: import, relink, remove, inspection, save queue, rename
+ * - Complete local media workflow: import, relink, remove, inspection, save queue, rename
  * - Timeline state management: undo/redo stack, play/pause, seek, autosave
  */
 
@@ -33,7 +33,7 @@ import {
 import { formatBytes, sanitizeProjectName } from "../lib/projectValidation.ts";
 import { MediaInspectionQueue } from "../lib/media/inspectionQueue.ts";
 import { formatDuration } from "../lib/media/inspector.ts";
-import { createTimeline, addTextOverlay } from "../lib/timeline/model.ts";
+import { createTimeline, addTextOverlay, getTimelineDuration } from "../lib/timeline/model.ts";
 import { TimelineUndoStack } from "../lib/timeline/undoRedo.ts";
 import { MediaPreviewPlayer } from "./MediaPreviewPlayer.tsx";
 import { TimelineEditor } from "./editor/TimelineEditor.tsx";
@@ -99,10 +99,10 @@ export function ProjectWorkspace({
   // Remove asset modal state
   const [assetToRemove, setAssetToRemove] = useState<ProjectAsset | null>(null);
 
-  // Export modal state (Phase 5)
+  // Export modal state
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  // Phase 6 modals
+  // History and cache modals
   const [isRevisionsModalOpen, setIsRevisionsModalOpen] = useState(false);
   const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
 
@@ -113,7 +113,11 @@ export function ProjectWorkspace({
     return p.timeline ?? createTimeline();
   });
 
-  const [undoStack] = useState(() => new TimelineUndoStack(50));
+  const [undoStack] = useState(() => {
+    const p = project as ProjectDocumentWithTimeline;
+    const initial = p.timeline ?? createTimeline();
+    return new TimelineUndoStack(initial, 50);
+  });
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
@@ -169,8 +173,8 @@ export function ProjectWorkspace({
   // ─── Timeline change handler ─────────────────────────────────────────────
 
   const handleTimelineChange = useCallback((newTimeline: TimelineDocument) => {
-    // Push current state to undo stack before mutating
-    undoStack.push(timelineRef.current);
+    // Record new state in undo stack
+    undoStack.push(newTimeline);
     setTimeline(newTimeline);
     setCanUndo(undoStack.canUndo());
     setCanRedo(undoStack.canRedo());
@@ -207,8 +211,16 @@ export function ProjectWorkspace({
   }, []);
 
   const handlePlayPause = useCallback(() => {
-    setIsPlaying((p) => !p);
-  }, []);
+    setIsPlaying((playing) => {
+      if (!playing) {
+        const duration = getTimelineDuration(timelineRef.current);
+        if (duration > 0 && currentTime >= duration - 0.05) {
+          setCurrentTime(0);
+        }
+      }
+      return !playing;
+    });
+  }, [currentTime]);
 
   const handlePlaybackTimeUpdate = useCallback((time: number) => {
     setCurrentTime(time);
@@ -223,7 +235,7 @@ export function ProjectWorkspace({
 
   const handleApplyRepurposedSequence = useCallback(
     async (updatedTimeline: TimelineDocument, reason: string) => {
-      // 1. Create a revision checkpoint using Phase 6 persistence
+      // 1. Create a revision checkpoint
       try {
         await createProjectRevision(workspaceHandle, docRef.current, reason, { force: true });
       } catch (err) {
@@ -231,7 +243,7 @@ export function ProjectWorkspace({
       }
 
       // 2. Push to undo stack
-      undoStack.push(timelineRef.current);
+      undoStack.push(updatedTimeline);
       setCanUndo(undoStack.canUndo());
       setCanRedo(undoStack.canRedo());
 
@@ -802,7 +814,7 @@ export function ProjectWorkspace({
         )}
       </Modal>
 
-      {/* Export Modal (Phase 5) */}
+      {/* Export Modal */}
       <ExportModal
         isOpen={isExportModalOpen}
         project={doc}
@@ -827,7 +839,7 @@ export function ProjectWorkspace({
         }}
       />
 
-      {/* Project Revisions Modal (Phase 6) */}
+      {/* Project Revisions Modal */}
       <ProjectRevisionsModal
         isOpen={isRevisionsModalOpen}
         project={doc}
@@ -837,13 +849,16 @@ export function ProjectWorkspace({
           const withTimeline = restoredDoc as ProjectDocumentWithTimeline;
           setDoc(withTimeline);
           if (withTimeline.timeline) {
+            undoStack.push(withTimeline.timeline);
             setTimeline(withTimeline.timeline);
+            setCanUndo(undoStack.canUndo());
+            setCanRedo(undoStack.canRedo());
           }
           onProjectUpdated(restoredDoc);
         }}
       />
 
-      {/* Cache Management Modal (Phase 6) */}
+      {/* Cache Management Modal */}
       <CacheManagerModal
         isOpen={isCacheModalOpen}
         workspaceHandle={workspaceHandle}
@@ -949,11 +964,11 @@ function LibraryMode({
           </Panel>
 
           <Panel>
-            <PanelHeader title="Phase Status" />
+            <PanelHeader title="Editor Quick Start" />
             <div className="p-4 flex flex-col gap-2.5 text-xs text-cs-text-secondary leading-relaxed">
               <div className="flex items-center gap-2">
-                <Badge variant="success">Phase 4 Active</Badge>
-                <span className="font-medium text-cs-text-primary">Timeline Editor</span>
+                <Badge variant="success">Ready</Badge>
+                <span className="font-medium text-cs-text-primary">Timeline & Composition</span>
               </div>
               <p>Switch to Editor mode to arrange clips on the timeline, add text overlays, and preview your edit.</p>
             </div>

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * WorkspaceHome — Workspace management, project lifecycle, and entry screen (Phase 2).
+ * WorkspaceHome — Workspace management, project lifecycle, and entry screen.
  *
  * Responsibilities:
  * - Local workspace folder selection via File System Access API.
@@ -167,7 +167,7 @@ function FeaturesSection() {
             </svg>
           }
           title="Timeline editing"
-          description="Arrange clips, trim, split and sequence your footage on a multi-track timeline — coming in a later phase."
+          description="Arrange clips, trim, split and sequence your footage on a multi-track timeline directly in your browser."
         />
         <FeatureCard
           icon={
@@ -209,7 +209,7 @@ export function WorkspaceHome() {
   const [projectToDelete, setProjectToDelete] = useState<ProjectSummary | null>(null);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
 
-  // Trash & Cache state (Phase 6)
+  // Trash & Cache state
   const [trashedProjects, setTrashedProjects] = useState<ProjectSummary[]>([]);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"projects" | "trash">("projects");
   const [projectToPermanentDelete, setProjectToPermanentDelete] = useState<ProjectSummary | null>(null);
@@ -384,7 +384,7 @@ export function WorkspaceHome() {
     }
   };
 
-  // Move to trash submission (Phase 6 recoverable deletion)
+  // Move to trash submission (recoverable deletion)
   const handleDeleteProjectSubmit = async () => {
     if (!workspaceHandle || !projectToDelete) return;
 
@@ -1025,7 +1025,7 @@ export function WorkspaceHome() {
         </form>
       </Modal>
 
-      {/* ─── Move Project to Trash Confirmation Dialog (Phase 6) ───────────── */}
+      {/* ─── Move Project to Trash Confirmation Dialog ───────────── */}
       <Modal
         open={projectToDelete !== null}
         onClose={() => setProjectToDelete(null)}
@@ -1070,7 +1070,7 @@ export function WorkspaceHome() {
         )}
       </Modal>
 
-      {/* ─── Permanent Delete Confirmation Dialog (Phase 6) ────────────────── */}
+      {/* ─── Permanent Delete Confirmation Dialog ────────────────── */}
       <Modal
         open={projectToPermanentDelete !== null}
         onClose={() => setProjectToPermanentDelete(null)}
@@ -1115,7 +1115,7 @@ export function WorkspaceHome() {
         )}
       </Modal>
 
-      {/* ─── Workspace Cache Management Modal (Phase 6) ──────────────────── */}
+      {/* ─── Workspace Cache Management Modal ──────────────────── */}
       {workspaceHandle && (
         <CacheManagerModal
           isOpen={isCacheModalOpen}

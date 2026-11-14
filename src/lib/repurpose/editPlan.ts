@@ -1,5 +1,5 @@
 /**
- * Edit Decision List (EDL) and Timeline sequence construction (Phase 7 & 8).
+ * Edit Decision List (EDL) and Timeline sequence construction.
  *
  * Rules:
  * - Generates typed, immutable EditPlan representation.
@@ -15,7 +15,7 @@ import type { RepurposeCandidate, EditPlan, EditPlanSegment, RepurposeObjective,
 import type { ExportAspectRatio } from "../../types/export.ts";
 import type { SourceTranscript } from "../../types/transcription.ts";
 import { isValidUuid } from "../projectValidation.ts";
-import { createTimeline, validateTimeline } from "../timeline/model.ts";
+import { createTimeline, validateTimeline, resolveTextOverlayCollisions } from "../timeline/model.ts";
 
 /**
  * Validates an EditPlan for structural and temporal integrity.
@@ -264,7 +264,7 @@ export function applyEditPlanToTimeline(
 
   // Preserve any non-caption title overlays from base timeline, then append new captions
   const nonCaptionOverlays = t.textOverlays.filter((o) => o.overlayType !== "caption");
-  const allOverlays = [...nonCaptionOverlays, ...newCaptions];
+  const allOverlays = resolveTextOverlayCollisions([...nonCaptionOverlays, ...newCaptions]);
 
   const updatedTimeline: TimelineDocument = {
     ...t,

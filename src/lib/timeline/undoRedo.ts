@@ -26,23 +26,41 @@ export class TimelineUndoStack {
   private readonly maxSize: number;
   /**
    * Stored snapshots. Index 0 is the oldest.
-   * `cursor` points to the entry that would be returned by the next undo().
+   * `cursor` points to the active snapshot in history.
    */
   private history: TimelineDocument[] = [];
   /**
-   * Index into `history` of the "current" entry — i.e. the state that was
-   * current when push() was called most recently (or after the last
-   * undo/redo navigation).
-   *
+   * Index into `history` of the active state.
    * -1 means the stack is empty.
    */
   private cursor: number = -1;
 
-  constructor(maxSize: number = 50) {
-    if (maxSize < 1) {
+  constructor(initialStateOrMaxSize?: TimelineDocument | number, maxSize: number = 50) {
+    let effectiveMaxSize = maxSize;
+    let initialDoc: TimelineDocument | undefined;
+
+    if (typeof initialStateOrMaxSize === "number") {
+      effectiveMaxSize = initialStateOrMaxSize;
+    } else if (initialStateOrMaxSize && typeof initialStateOrMaxSize === "object") {
+      initialDoc = initialStateOrMaxSize;
+    }
+
+    if (effectiveMaxSize < 1) {
       throw new RangeError("TimelineUndoStack: maxSize must be >= 1");
     }
-    this.maxSize = maxSize;
+    this.maxSize = effectiveMaxSize;
+
+    if (initialDoc) {
+      this.init(initialDoc);
+    }
+  }
+
+  /**
+   * Resets the undo stack and seeds it with an initial timeline state.
+   */
+  init(state: TimelineDocument): void {
+    this.history = [deepClone(state)];
+    this.cursor = 0;
   }
 
   /**
@@ -104,6 +122,12 @@ export class TimelineUndoStack {
   /** Number of snapshots currently stored. */
   get size(): number {
     return this.history.length;
+  }
+
+  /** Returns the active snapshot without moving the cursor. */
+  current(): TimelineDocument | null {
+    if (this.cursor < 0 || this.cursor >= this.history.length) return null;
+    return deepClone(this.history[this.cursor]);
   }
 }
 

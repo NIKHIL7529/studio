@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * MediaPreviewPlayer — Video and audio preview player with seek controls and media inspection summary (Phase 3).
+ * MediaPreviewPlayer — Video and audio preview player with seek controls and media inspection summary.
  *
  * Responsibilities:
  * - Native browser playback for supported local video and audio files using object URLs.
@@ -9,7 +9,7 @@
  * - Responsive preview surface that preserves media aspect ratio.
  * - Handles autoplay restrictions, missing files, permission states, and unsupported media.
  * - Displays inspected technical summary (container, duration, resolution, rotation, frame rate, audio).
- * - Tiers preview cleanly: native player for playback, WebCodecs capability query for future phases.
+ * - Tiers preview cleanly: native player for playback, WebCodecs capability query for export readiness.
  */
 
 import * as React from "react";

@@ -1,5 +1,5 @@
 /**
- * Preview source lifecycle and playback controller for local media (Phase 3).
+ * Preview source lifecycle and playback controller for local media.
  *
  * Rules:
  * - Backed by browser-native HTMLMediaElement (<video> / <audio>) and object URLs.

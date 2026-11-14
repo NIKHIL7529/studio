@@ -1,5 +1,5 @@
 /**
- * Local video rendering and export pipeline (Phase 5).
+ * Local video rendering and export pipeline.
  *
  * Rules:
  * - Executes entirely locally in the user's browser.

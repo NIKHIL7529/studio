@@ -1,5 +1,5 @@
 /**
- * Render plan generation for Content Studio (Phase 5).
+ * Render plan generation for Content Studio.
  *
  * Rules:
  * - Deterministic, immutable snapshot of project/timeline state.
@@ -234,11 +234,12 @@ export function buildRenderPlan(
       if (activeClip) break;
     }
 
-    // Find active text overlays spanning this time
-    const activeOverlays = timelineSnapshot.textOverlays.filter(
+    // Find active text overlays spanning this time (invariant: at most 1 at any moment)
+    const matchingOverlays = timelineSnapshot.textOverlays.filter(
       (overlay) =>
         presentationTimeSeconds >= overlay.startTime && presentationTimeSeconds < overlay.endTime
     );
+    const activeOverlays = matchingOverlays.slice(0, 1);
 
     videoFrames.push({
       frameIndex,

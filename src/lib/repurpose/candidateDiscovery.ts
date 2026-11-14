@@ -1,5 +1,5 @@
 /**
- * Content-derived candidate window formation from media and speech signals (Phase 7 & 8).
+ * Content-derived candidate window formation from media and speech signals.
  *
  * Rules:
  * - Candidate duration is CONTENT-DERIVED: follows complete sentences, thoughts, and natural boundaries.
