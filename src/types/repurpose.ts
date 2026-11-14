@@ -233,5 +233,6 @@ export interface SourceCoverageReport {
     engine?: string;
     cueCount: number;
     isWordLevel: boolean;
+    errorMessage?: string;
   };
 }

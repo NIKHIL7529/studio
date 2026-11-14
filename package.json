@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "eslint src test",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "postinstall": "node scripts/patch-browser-whisper.js"
   },
   "dependencies": {
     "browser-whisper": "^2.0.0",

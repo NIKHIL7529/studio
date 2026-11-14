@@ -473,6 +473,10 @@ export function RepurposeWorkflow({
                                       ) : (
                                         <span className="text-cs-primary font-medium">Local Whisper ASR ({report.transcriptStatus.cueCount} cues)</span>
                                       )
+                                    ) : report.transcriptStatus.errorMessage ? (
+                                      <span className="text-cs-warning font-medium" title={report.transcriptStatus.errorMessage}>
+                                        ASR fallback: visual/acoustic (speech engine unavailable)
+                                      </span>
                                     ) : (
                                       <span className="text-cs-text-tertiary">Acoustic & visual dynamics</span>
                                     )}

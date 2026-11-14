@@ -198,6 +198,7 @@ export async function runRepurposePipeline(
     }
 
     // If no user subtitle, and local transcription is enabled and audio exists:
+    let transcriptionError: string | undefined = undefined;
     if (!sourceTranscript && hasAudio && config.enableTranscription && asrEngine) {
       try {
         reportProgress(
@@ -222,6 +223,7 @@ export async function runRepurposePipeline(
         }
       } catch (err: unknown) {
         console.warn(`Local transcription skipped/failed for ${asset.name}:`, err);
+        transcriptionError = err instanceof Error ? err.message : String(err);
       }
     }
 
@@ -363,6 +365,7 @@ export async function runRepurposePipeline(
         engine: sourceTranscript?.engine,
         cueCount: sourceTranscript?.cues.length || 0,
         isWordLevel: !!sourceTranscript?.isWordLevel,
+        errorMessage: transcriptionError,
       },
     };
   }

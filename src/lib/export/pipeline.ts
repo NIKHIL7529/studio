@@ -15,9 +15,9 @@ import {
   Mp4OutputFormat,
   WebMOutputFormat,
   CanvasSource,
-  AudioBufferSource,
+  AudioSampleSource,
   CanvasSink,
-  AudioBufferSink,
+  AudioSampleSink,
   QUALITY_HIGH,
   QUALITY_MEDIUM,
   QUALITY_LOW,
@@ -26,6 +26,7 @@ import { createMediaInput, disposeMediaInput } from "../media/input.ts";
 import { createWorkspaceProgressiveWriter } from "./progressiveWriter.ts";
 import { validateExportedMedia } from "./validation.ts";
 import { lockCacheResource, unlockCacheResource } from "../cache/cacheManager.ts";
+import { AudioTrackMixer } from "./audioRenderer.ts";
 import type { TextOverlay } from "../../types/timeline.ts";
 import type {
   RenderPlan,
@@ -237,7 +238,8 @@ export async function renderAndExport(
   const openedInputs: ReturnType<typeof createMediaInput>[] = [];
   let output: Output | null = null;
   let canvasSource: CanvasSource | null = null;
-  let audioSource: AudioBufferSource | null = null;
+  let audioSource: AudioSampleSource | null = null;
+  let audioMixer: AudioTrackMixer | null = null;
 
   try {
     if (signal?.aborted) {
@@ -247,7 +249,7 @@ export async function renderAndExport(
     // 3. Prepare source inputs and sinks
     reportProgress("checking-capabilities", 8, "Initializing media decoders...");
     const canvasSinks = new Map<string, CanvasSink>();
-    const audioSinks = new Map<string, AudioBufferSink>();
+    const audioSinks = new Map<string, AudioSampleSink>();
 
     for (const [assetId, sourceMeta] of plan.sources.entries()) {
       if (!sourceMeta.file) continue;
@@ -271,7 +273,7 @@ export async function renderAndExport(
       if (sourceMeta.hasAudio) {
         const aTracks = await input.getAudioTracks();
         if (aTracks.length > 0) {
-          const sink = new AudioBufferSink(aTracks[0]);
+          const sink = new AudioSampleSink(aTracks[0]);
           audioSinks.set(assetId, sink);
         }
       }
@@ -325,41 +327,147 @@ export async function renderAndExport(
     const shouldRenderAudio = plan.hasAudio && audioSinks.size > 0;
     if (shouldRenderAudio) {
       const audioCodec = plan.settings.format === "webm" ? "opus" : "aac";
-      audioSource = new AudioBufferSource({
+      audioSource = new AudioSampleSource({
         codec: audioCodec,
         quality,
       });
       output.addAudioTrack(audioSource);
+      audioMixer = new AudioTrackMixer(plan, audioSinks, {
+        outputSampleRate: plan.settings.audioSampleRate || 48000,
+        outputChannels: plan.settings.audioChannels || 2,
+      });
     }
 
     await output.start();
 
-    // 6. Audio Rendering Stage
-    if (shouldRenderAudio && audioSource) {
-      reportProgress("rendering-audio", 12, "Mixing audio tracks...");
-      await renderAndMixAudio(plan, audioSinks, audioSource, signal);
-    }
+    // 6. Interleaved Video & Audio Rendering
+    // Interleaves bounded 1.0-second blocks of audio and video across the presentation timeline,
+    // ensuring multi-track muxer packet balance, sample-accurate audio continuity, and bounded memory.
+    const intervalSeconds = 1.0;
+    const totalDurationSeconds = plan.totalDurationSeconds;
+    const totalVideoFrames = plan.totalFrames;
+    const outputSampleRate = plan.settings.audioSampleRate || 48000;
+    const totalAudioSamples = Math.round(totalDurationSeconds * outputSampleRate);
 
-    if (signal?.aborted) {
-      throw new DOMException("Export was cancelled.", "AbortError");
-    }
+    let currentVideoFrame = 0;
+    let currentAudioSample = 0;
 
-    // 7. Video Rendering Stage (Frame by Frame)
-    reportProgress("rendering-video", 20, "Rendering video frames...", 0, plan.totalFrames);
-    const totalFrames = plan.totalFrames;
+    const totalSteps = Math.ceil(totalDurationSeconds / intervalSeconds);
 
-    for (let i = 0; i < totalFrames; i++) {
+    for (let step = 0; step < totalSteps; step++) {
       if (signal?.aborted) {
         throw new DOMException("Export was cancelled.", "AbortError");
       }
 
-      const frame = plan.videoFrames[i];
+      const stepStartTime = step * intervalSeconds;
+      const stepEndTime = Math.min(totalDurationSeconds, stepStartTime + intervalSeconds);
 
-      // A. Clear to black background
+      // A. Encode continuous audio block for this interval
+      if (shouldRenderAudio && audioSource && audioMixer) {
+        const targetAudioEndSample = Math.min(
+          totalAudioSamples,
+          Math.round(stepEndTime * outputSampleRate)
+        );
+        const framesToRender = targetAudioEndSample - currentAudioSample;
+
+        if (framesToRender > 0) {
+          const audioSample = await audioMixer.renderBlock(
+            currentAudioSample,
+            framesToRender
+          );
+          if (audioSample) {
+            try {
+              await audioSource.add(audioSample);
+            } catch (err) {
+              console.warn("Audio encoding warning:", err);
+            } finally {
+              audioSample.close();
+            }
+          }
+          currentAudioSample = targetAudioEndSample;
+        }
+      }
+
+      // B. Encode video frames for this interval
+      const targetVideoFrame = Math.min(
+        totalVideoFrames,
+        Math.ceil(stepEndTime * plan.frameRate)
+      );
+
+      for (let f = currentVideoFrame; f < targetVideoFrame; f++) {
+        if (signal?.aborted) {
+          throw new DOMException("Export was cancelled.", "AbortError");
+        }
+
+        const frame = plan.videoFrames[f];
+
+        // 1. Clear to black background
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // 2. Render active video clip if present
+        if (frame.activeClip) {
+          const sink = canvasSinks.get(frame.activeClip.assetId);
+          if (sink) {
+            try {
+              const wrapped = await sink.getCanvas(frame.activeClip.sourceTimeSeconds);
+              if (wrapped?.canvas) {
+                ctx.drawImage(wrapped.canvas, 0, 0, canvasWidth, canvasHeight);
+              }
+            } catch (err) {
+              console.warn(`Frame ${f}: failed to decode source canvas`, err);
+            }
+          }
+        }
+
+        // 3. Render active text overlays
+        if (frame.activeOverlays.length > 0) {
+          for (const overlay of frame.activeOverlays) {
+            renderTextOverlayToCanvas(ctx, overlay, canvasWidth, canvasHeight);
+          }
+        }
+
+        // 4. Feed composited frame to CanvasSource with backpressure
+        await canvasSource.add(frame.presentationTimeSeconds, frame.durationSeconds);
+      }
+      currentVideoFrame = targetVideoFrame;
+
+      // C. Report progress
+      const percent = 15 + (currentVideoFrame / Math.max(1, totalVideoFrames)) * 73;
+      reportProgress(
+        "rendering-video",
+        percent,
+        `Encoding: ${currentVideoFrame} of ${totalVideoFrames} frames (${stepEndTime.toFixed(1)}s)...`,
+        currentVideoFrame,
+        totalVideoFrames
+      );
+
+      // Yield event loop for cancellation and UI updates
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
+    // Flush any remaining audio samples if duration rounding had leftover samples
+    if (shouldRenderAudio && audioSource && audioMixer && currentAudioSample < totalAudioSamples) {
+      const remaining = totalAudioSamples - currentAudioSample;
+      const audioSample = await audioMixer.renderBlock(currentAudioSample, remaining);
+      if (audioSample) {
+        try {
+          await audioSource.add(audioSample);
+        } catch {} finally {
+          audioSample.close();
+        }
+      }
+      currentAudioSample = totalAudioSamples;
+    }
+
+    // Flush any remaining video frames
+    while (currentVideoFrame < totalVideoFrames) {
+      if (signal?.aborted) {
+        throw new DOMException("Export was cancelled.", "AbortError");
+      }
+      const frame = plan.videoFrames[currentVideoFrame];
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-      // B. Render active video clip if present
       if (frame.activeClip) {
         const sink = canvasSinks.get(frame.activeClip.assetId);
         if (sink) {
@@ -368,38 +476,19 @@ export async function renderAndExport(
             if (wrapped?.canvas) {
               ctx.drawImage(wrapped.canvas, 0, 0, canvasWidth, canvasHeight);
             }
-          } catch (err) {
-            console.warn(`Frame ${i}: failed to decode source canvas`, err);
-          }
+          } catch {}
         }
       }
-
-      // C. Render active text overlays
       if (frame.activeOverlays.length > 0) {
         for (const overlay of frame.activeOverlays) {
           renderTextOverlayToCanvas(ctx, overlay, canvasWidth, canvasHeight);
         }
       }
-
-      // D. Feed composited frame to CanvasSource with backpressure
       await canvasSource.add(frame.presentationTimeSeconds, frame.durationSeconds);
-
-      // E. Update progress
-      const percent = 20 + ((i + 1) / totalFrames) * 65; // 20% to 85%
-      if (i % 5 === 0 || i === totalFrames - 1) {
-        reportProgress(
-          "rendering-video",
-          percent,
-          `Encoding frame ${i + 1} of ${totalFrames}...`,
-          i + 1,
-          totalFrames
-        );
-        // Yield to allow cancel events and UI painting
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      currentVideoFrame++;
     }
 
-    // 8. Finalize Encoders & Container
+    // 7. Finalize Encoders & Container
     reportProgress("finalizing-output", 88, "Finalizing container and metadata...");
     canvasSource.close();
     if (audioSource) {
@@ -408,11 +497,11 @@ export async function renderAndExport(
 
     await output.finalize();
 
-    // 9. Finalize Writer and acquire File
+    // 8. Finalize Writer and acquire File
     reportProgress("validating-output", 92, "Validating output file...");
     const outputFile = await writer.finalize();
 
-    // 10. Output Validation
+    // 9. Output Validation
     const validation = await validateExportedMedia(outputFile, plan);
     if (!validation.ok) {
       throw new Error(`Output validation failed: ${validation.error}`);
@@ -459,99 +548,13 @@ export async function renderAndExport(
     reportProgress("failed", 0, `Export failed: ${message}`);
     throw err;
   } finally {
+    if (audioMixer) {
+      audioMixer.dispose();
+    }
     unlockCacheResource(writer.relativePath);
     // Clean up all opened media inputs
     for (const input of openedInputs) {
       disposeMediaInput(input);
     }
-  }
-}
-
-/**
- * Decodes, gains, and mixes audio segments into sequential AudioBuffers.
- */
-async function renderAndMixAudio(
-  plan: RenderPlan,
-  audioSinks: Map<string, AudioBufferSink>,
-  audioSource: AudioBufferSource,
-  signal?: AbortSignal
-): Promise<void> {
-  const sampleRate = plan.settings.audioSampleRate || 48000;
-  const numberOfChannels = plan.settings.audioChannels || 2;
-
-  // Process audio in 1-second chunks to stream and maintain strictly bounded RAM
-  const chunkDuration = 1.0;
-  const totalDuration = plan.totalDurationSeconds;
-  const totalChunks = Math.ceil(totalDuration / chunkDuration);
-
-  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-    if (signal?.aborted) {
-      throw new DOMException("Export was cancelled.", "AbortError");
-    }
-
-    const chunkStart = chunkIndex * chunkDuration;
-    const chunkEnd = Math.min(totalDuration, chunkStart + chunkDuration);
-    const thisChunkSamples = Math.round((chunkEnd - chunkStart) * sampleRate);
-
-    // Create AudioBuffer for this chunk
-    let audioBuffer: AudioBuffer;
-    if (typeof AudioBuffer !== "undefined") {
-      audioBuffer = new AudioBuffer({
-        numberOfChannels,
-        length: thisChunkSamples,
-        sampleRate,
-      });
-    } else {
-      // In headless test environments where AudioBuffer constructor may not exist, skip chunk mix
-      return;
-    }
-
-    const left = audioBuffer.getChannelData(0);
-    const right = numberOfChannels > 1 ? audioBuffer.getChannelData(1) : left;
-
-    // Find audio segments that overlap this chunk
-    const activeSegments = plan.audioSegments.filter(
-      (s) => s.volume > 0 && s.timelineStartSeconds < chunkEnd && s.timelineEndSeconds > chunkStart
-    );
-
-    for (const segment of activeSegments) {
-      const sink = audioSinks.get(segment.assetId);
-      if (!sink) continue;
-
-      const segOverlapStart = Math.max(chunkStart, segment.timelineStartSeconds);
-      const segOverlapEnd = Math.min(chunkEnd, segment.timelineEndSeconds);
-      const segOffsetInClip = segOverlapStart - segment.timelineStartSeconds;
-      const sourceTime = segment.sourceInSeconds + segOffsetInClip;
-
-      try {
-        const wrapped = await sink.getBuffer(sourceTime);
-        if (wrapped?.buffer) {
-          const srcBuf = wrapped.buffer;
-          const srcLeft = srcBuf.getChannelData(0);
-          const srcRight = srcBuf.numberOfChannels > 1 ? srcBuf.getChannelData(1) : srcLeft;
-
-          const destStartSample = Math.round((segOverlapStart - chunkStart) * sampleRate);
-          const copyLength = Math.min(
-            thisChunkSamples - destStartSample,
-            Math.round((segOverlapEnd - segOverlapStart) * sampleRate),
-            srcBuf.length
-          );
-
-          for (let s = 0; s < copyLength; s++) {
-            const destIdx = destStartSample + s;
-            if (destIdx < thisChunkSamples && s < srcBuf.length) {
-              left[destIdx] = Math.max(-1, Math.min(1, left[destIdx] + srcLeft[s] * segment.volume));
-              right[destIdx] = Math.max(-1, Math.min(1, right[destIdx] + srcRight[s] * segment.volume));
-            }
-          }
-        }
-      } catch (err) {
-        // Individual audio sample retrieval failure shouldn't crash the whole export
-        console.warn("Audio retrieval warning for chunk", chunkIndex, err);
-      }
-    }
-
-    // Add audio buffer chunk to Mediabunny audio source with backpressure
-    await audioSource.add(audioBuffer);
   }
 }

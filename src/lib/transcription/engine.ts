@@ -128,6 +128,9 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
 
   /**
    * Transcribes a media file locally using the loaded model.
+   * If a WebGPU model (e.g. whisper-tiny_timestamped) fails due to WebGPU/driver limits,
+   * automatically falls back to CPU/WASM whisper-tiny for resilience.
+   * Ensures worker isolation so failures never cascade to subsequent files.
    */
   async transcribe(
     file: File,
@@ -139,7 +142,7 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
       onCue?: (cue: TranscriptionCue) => void;
     }
   ): Promise<SourceTranscript> {
-    const modelName = options?.modelName || this.currentModel || "whisper-tiny_timestamped";
+    const targetModel = options?.modelName || this.currentModel || "whisper-tiny_timestamped";
     const language = options?.language;
     const signal = options?.signal;
     const onProgress = options?.onProgress;
@@ -149,6 +152,36 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
       throw new DOMException("Transcription cancelled by user.", "AbortError");
     }
 
+    try {
+      return await this.executeTranscriptionSession(file, targetModel, language, signal, onProgress, onCue);
+    } catch (primaryErr: unknown) {
+      if (signal?.aborted || (primaryErr instanceof Error && primaryErr.name === "AbortError")) {
+        throw primaryErr;
+      }
+
+      // If timestamped WebGPU model failed, try resilient WASM/CPU fallback with whisper-tiny
+      if (targetModel.endsWith("_timestamped")) {
+        console.warn(`[LocalTranscriptionEngine] Timestamped model "${targetModel}" encountered error (${primaryErr}). Attempting CPU/WASM fallback with "whisper-tiny"...`);
+        onProgress?.({
+          stage: "loading-model",
+          percent: 10,
+          statusText: "WebGPU pipeline recovery: switching to CPU/WASM Whisper model...",
+        });
+        return await this.executeTranscriptionSession(file, "whisper-tiny", language, signal, onProgress, onCue);
+      }
+
+      throw primaryErr;
+    }
+  }
+
+  private async executeTranscriptionSession(
+    file: File,
+    modelName: string,
+    language: string | undefined,
+    signal: AbortSignal | undefined,
+    onProgress?: (progress: TranscriptionProgress) => void,
+    onCue?: (cue: TranscriptionCue) => void
+  ): Promise<SourceTranscript> {
     onProgress?.({
       stage: "loading-model",
       percent: 5,
@@ -157,14 +190,17 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
 
     const { BrowserWhisper } = await import("browser-whisper");
 
-    let transcriber = this.activeWhisperInstance as InstanceType<typeof BrowserWhisper>;
-    if (!transcriber || this.currentModel !== modelName) {
-      transcriber = new BrowserWhisper({ model: modelName as Parameters<typeof BrowserWhisper.deleteModel>[0], language });
-      this.activeWhisperInstance = transcriber;
-      this.currentModel = modelName;
-    }
+    // Create a dedicated instance for this session to ensure worker isolation
+    const transcriber = new BrowserWhisper({
+      model: modelName as Parameters<typeof BrowserWhisper.deleteModel>[0],
+      language,
+    });
+    this.activeWhisperInstance = transcriber;
+    this.currentModel = modelName;
 
     if (signal?.aborted) {
+      transcriber.dispose();
+      this.activeWhisperInstance = null;
       throw new DOMException("Transcription cancelled by user.", "AbortError");
     }
 
@@ -198,14 +234,17 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
     });
 
     // Handle abort signal
+    let abortListener: (() => void) | null = null;
     if (signal) {
-      signal.addEventListener("abort", () => {
+      abortListener = () => {
         try {
           if (typeof stream.cancel === "function") {
             stream.cancel();
           }
+          transcriber.dispose();
         } catch { /* ignored */ }
-      });
+      };
+      signal.addEventListener("abort", abortListener, { once: true });
     }
 
     let cueCounter = 0;
@@ -239,10 +278,26 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
         onCue?.(cue);
       }
     } catch (err: unknown) {
+      try {
+        transcriber.dispose();
+      } catch { /* ignored */ }
+      this.activeWhisperInstance = null;
+
       if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
         throw new DOMException("Transcription cancelled by user.", "AbortError");
       }
       throw err;
+    } finally {
+      if (signal && abortListener) {
+        signal.removeEventListener("abort", abortListener);
+      }
+      // Clean up worker after stream completion to guarantee no leftover locks or leaks
+      try {
+        transcriber.dispose();
+      } catch { /* ignored */ }
+      if (this.activeWhisperInstance === transcriber) {
+        this.activeWhisperInstance = null;
+      }
     }
 
     // Sort and validate cues
