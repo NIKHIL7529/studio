@@ -84,6 +84,62 @@ export interface ProjectDocument {
    * Absent on projects created before Phase 4.
    */
   timeline?: TimelineDocument;
+
+  /**
+   * Optional registered exports for this project.
+   * Added in Phase 5; schemaVersion remains 1.
+   * Absent on projects created before Phase 5.
+   */
+  exports?: ProjectExport[];
+}
+
+/**
+ * Output settings recorded with a completed project export.
+ */
+export interface ExportOutputSettings {
+  targetAspectRatio: "16:9" | "9:16" | "1:1" | "4:5";
+  width: number;
+  height: number;
+  frameRate: number;
+  videoCodec: string;
+  audioCodec?: string;
+  format: "mp4" | "webm";
+}
+
+/**
+ * Persistent metadata for a completed local export.
+ */
+export interface ProjectExport {
+  /** Stable UUID identifying this export */
+  id: string;
+
+  /** Display output filename (e.g. "interview-1080p.mp4") */
+  name: string;
+
+  /** Verified relative path within workspace (e.g. "projects/<id>/exports/interview-1080p.mp4") */
+  relativePath: string;
+
+  /** ISO 8601 completion timestamp */
+  createdAt: string;
+
+  /** Export configuration profile */
+  settings: ExportOutputSettings;
+
+  /** Verified duration in seconds */
+  duration: number;
+
+  /** Verified output dimensions */
+  width: number;
+  height: number;
+
+  /** Verified file size in bytes */
+  fileSize: number;
+
+  /** Validation / completion state */
+  status: "completed" | "failed";
+
+  /** Actionable error if validation failed */
+  error?: string;
 }
 
 /**

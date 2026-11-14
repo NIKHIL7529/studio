@@ -8,7 +8,7 @@
  * - Never execute or evaluate any content from the document.
  */
 
-import type { ProjectDocument, ProjectAsset, MediaCategory } from "../types/project.ts";
+import type { ProjectDocument, ProjectAsset, MediaCategory, ProjectExport, ExportOutputSettings } from "../types/project.ts";
 import type { TimelineDocument, TimelineTrack, TimelineClip, TextOverlay } from "../types/timeline.ts";
 import type { InspectedMediaMetadata, InspectedVideoTrack, InspectedAudioTrack } from "./media/types.ts";
 import { validateTimeline } from "./timeline/model.ts";
@@ -398,18 +398,140 @@ export function validateProjectDocument(
     timeline = timelineRes.data;
   }
 
+  let exportsList: ProjectExport[] | undefined = undefined;
+  if (Array.isArray(obj.exports)) {
+    exportsList = [];
+    for (let i = 0; i < obj.exports.length; i++) {
+      const expRes = validateProjectExport(obj.exports[i]);
+      if (!expRes.ok) {
+        return { ok: false, error: `Export at index ${i} is invalid: ${expRes.error}` };
+      }
+      exportsList.push(expRes.data);
+    }
+  }
+
+  const docData: ProjectDocument = {
+    schemaVersion: 1,
+    id: (obj.id as string).trim(),
+    name: sanitizedName,
+    createdAt: (obj.createdAt as string).trim(),
+    updatedAt: (obj.updatedAt as string).trim(),
+    assets: validatedAssets,
+  };
+
+  if (settings !== undefined) {
+    docData.settings = settings;
+  }
+  if (timeline !== undefined) {
+    docData.timeline = timeline;
+  }
+  if (exportsList !== undefined) {
+    docData.exports = exportsList;
+  }
+
   return {
     ok: true,
-    data: {
-      schemaVersion: 1,
-      id: (obj.id as string).trim(),
-      name: sanitizedName,
-      createdAt: (obj.createdAt as string).trim(),
-      updatedAt: (obj.updatedAt as string).trim(),
-      assets: validatedAssets,
-      settings,
-      timeline,
-    },
+    data: docData,
+  };
+}
+
+/**
+ * Validates an individual project export record.
+ */
+export function validateProjectExport(
+  raw: unknown
+): { ok: true; data: ProjectExport } | { ok: false; error: string } {
+  if (typeof raw !== "object" || raw === null) {
+    return { ok: false, error: "Project export must be an object." };
+  }
+
+  const obj = raw as Record<string, unknown>;
+
+  if (!isValidUuid(obj.id)) {
+    return { ok: false, error: `Export id must be a valid UUID. Received: ${String(obj.id)}` };
+  }
+
+  if (typeof obj.name !== "string" || obj.name.trim().length === 0) {
+    return { ok: false, error: "Export name must be a non-empty string." };
+  }
+
+  if (typeof obj.relativePath !== "string" || !isSafeRelativePath(obj.relativePath)) {
+    return { ok: false, error: `Export relativePath contains unsafe path: ${String(obj.relativePath)}` };
+  }
+
+  if (!isValidIsoDate(obj.createdAt)) {
+    return { ok: false, error: `Invalid createdAt timestamp for export: ${String(obj.createdAt)}` };
+  }
+
+  if (typeof obj.duration !== "number" || Number.isNaN(obj.duration) || obj.duration <= 0) {
+    return { ok: false, error: "Export duration must be a positive number." };
+  }
+
+  if (typeof obj.width !== "number" || obj.width <= 0 || typeof obj.height !== "number" || obj.height <= 0) {
+    return { ok: false, error: "Export width and height must be positive numbers." };
+  }
+
+  if (typeof obj.fileSize !== "number" || Number.isNaN(obj.fileSize) || obj.fileSize < 0) {
+    return { ok: false, error: "Export fileSize must be a non-negative number." };
+  }
+
+  const status = obj.status === "failed" ? "failed" : "completed";
+
+  let settings: ExportOutputSettings = {
+    targetAspectRatio: "16:9",
+    width: Math.floor(obj.width),
+    height: Math.floor(obj.height),
+    frameRate: 30,
+    videoCodec: "avc",
+    format: "mp4",
+  };
+
+  if (typeof obj.settings === "object" && obj.settings !== null) {
+    const rawSet = obj.settings as Record<string, unknown>;
+    const allowedRatios = ["16:9", "9:16", "1:1", "4:5"] as const;
+    const ratio = (typeof rawSet.targetAspectRatio === "string" && allowedRatios.includes(rawSet.targetAspectRatio as typeof allowedRatios[number]))
+      ? (rawSet.targetAspectRatio as typeof allowedRatios[number])
+      : "16:9";
+    const width = typeof rawSet.width === "number" && rawSet.width > 0 ? Math.floor(rawSet.width) : Math.floor(obj.width);
+    const height = typeof rawSet.height === "number" && rawSet.height > 0 ? Math.floor(rawSet.height) : Math.floor(obj.height);
+    const frameRate = typeof rawSet.frameRate === "number" && rawSet.frameRate > 0 ? rawSet.frameRate : 30;
+    const videoCodec = typeof rawSet.videoCodec === "string" ? rawSet.videoCodec : "avc";
+    const audioCodec = typeof rawSet.audioCodec === "string" ? rawSet.audioCodec : undefined;
+    const format = rawSet.format === "webm" ? "webm" : "mp4";
+
+    settings = {
+      targetAspectRatio: ratio,
+      width,
+      height,
+      frameRate,
+      videoCodec,
+      format,
+    };
+    if (audioCodec !== undefined) {
+      settings.audioCodec = audioCodec;
+    }
+  }
+
+  const exportData: ProjectExport = {
+    id: (obj.id as string).trim(),
+    name: (obj.name as string).trim(),
+    relativePath: (obj.relativePath as string).replace(/\\/g, "/").trim(),
+    createdAt: (obj.createdAt as string).trim(),
+    settings,
+    duration: obj.duration,
+    width: Math.floor(obj.width),
+    height: Math.floor(obj.height),
+    fileSize: Math.floor(obj.fileSize),
+    status,
+  };
+
+  if (typeof obj.error === "string") {
+    exportData.error = obj.error;
+  }
+
+  return {
+    ok: true,
+    data: exportData,
   };
 }
 

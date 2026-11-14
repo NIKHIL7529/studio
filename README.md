@@ -2,8 +2,8 @@
 
 A browser-based, local-first video editor and repurposing workspace.
 
-> **Phase 3 — Local media engine foundation.**  
-> This release connects imported local media references to the application, inspects media files using Mediabunny, provides reliable native preview playback and seeking, and establishes safe resource handling and WebCodecs capability detection. Timeline editing and video export will arrive in later phases.
+> **Phase 5 — Local video rendering and export.**  
+> This release implements the complete local export pipeline from the timeline to playable output files: deterministic render-plan generation, WebCodecs/Mediabunny composition and encoding, progressive disk streaming to the user's workspace, output validation, and project export history.
 
 ---
 
@@ -14,13 +14,13 @@ Content Studio lets you import your own videos, arrange clips on a timeline, add
 **Core principles:**
 
 - **Local-first.** Your source videos, project data and exports stay on your computer. Nothing is uploaded.
-- **Browser-native.** Processing uses WebCodecs, Web Workers, the File System Access API and related browser APIs. No FFmpeg installation required.
+- **Browser-native.** Processing uses WebCodecs, Web Workers, Mediabunny, Canvas and File System Access APIs. No FFmpeg or FFmpeg.wasm required.
 - **No account.** Open the site and start working. No sign-up, subscription or cloud dependency.
 - **Open source.** An independent project with minimal dependencies and no proprietary infrastructure.
 
 ---
 
-## Current state (Phase 3)
+## Current state (Phase 5)
 
 | Area | Status |
 |---|---|
@@ -37,8 +37,50 @@ Content Studio lets you import your own videos, arrange clips on a timeline, add
 | Native video & audio preview and seek scrubbing | ✅ Implemented (Phase 3) |
 | WebCodecs runtime capability checks & fallback | ✅ Implemented (Phase 3) |
 | Resource cleanup & object URL lifecycle | ✅ Implemented (Phase 3) |
-| Timeline editor | 🔜 Phase 4+ |
-| Local rendering and export | 🔜 Phase 5+ |
+| Multi-track timeline, trimming, snapping & undo/redo | ✅ Implemented (Phase 4) |
+| Text overlays and styled captions | ✅ Implemented (Phase 4) |
+| Deterministic render-plan generation | ✅ Implemented (Phase 5) |
+| Capability preflight & runtime encoder verification | ✅ Implemented (Phase 5) |
+| Local rendering pipeline (Mediabunny + WebCodecs) | ✅ Implemented (Phase 5) |
+| Progressive disk streaming to workspace | ✅ Implemented (Phase 5) |
+| Local output validation & smoke testing | ✅ Implemented (Phase 5) |
+| Export history persistence & cancellation safeguards | ✅ Implemented (Phase 5) |
+
+---
+
+## Phase 5 Local Rendering & Export Architecture
+
+### 1. Deterministic Render Planning
+- Pure function `buildRenderPlan()` creates an immutable execution snapshot from the timeline and project document.
+- Uses integer microsecond arithmetic (`BigInt`) to prevent cumulative floating-point timing drift.
+- Resolves top-to-bottom video track stacking, clip boundary trimming (`sourceIn`/`sourceOut`), timeline gaps (blank frames), audio volume/mute mixing, and text overlay styling/positioning.
+- Pre-export validation checks that all referenced media sources exist, are accessible, and have valid handles before rendering begins.
+
+### 2. Runtime Capability Preflight
+- Uses `VideoEncoder.isConfigSupported()` and `AudioEncoder.isConfigSupported()` with exact codec parameters (`avc1.640028`, `mp4a.40.2`, `vp09.00.10.08`, `opus`).
+- Does not guess or rely on user-agent sniffing.
+- Default profile: **MP4 with H.264 video and AAC audio**. Supported fallback: **WebM with VP9 and Opus audio**.
+- If a browser or hardware configuration cannot encode the requested settings, clear explanations are provided and the project remains intact.
+
+### 3. Progressive Disk Writing
+- `WorkspaceProgressiveWriter` writes chunks directly to `projects/<id>/exports/.tmp_<id>_<timestamp>_<name>` using `FileSystemWritableFileStream` and Mediabunny `StreamTarget`.
+- Bounded memory usage: never buffers entire rendered videos in JavaScript memory.
+- Safe staging: atomic promotion to the final destination upon successful completion and validation; immediate cleanup of incomplete files on abort or error.
+- Non-destructive naming: automatically avoids overwriting existing exports by generating collision-free names (e.g., `video (1).mp4`).
+- Memory fallback mode (capped at 500 MB) for environments where the File System Access API writable streams are unavailable.
+
+### 4. Output Validation & Verification
+- After writing is finalized, the resulting file is inspected locally using Mediabunny:
+  - Container readability and non-zero file size.
+  - Presence of expected video and audio tracks.
+  - Codec verification (e.g. `avc` for MP4, `vp9` for WebM).
+  - Dimension matching (within ±4px macroblock tolerance).
+  - Duration verification (within ±0.5s tolerance).
+  - Browser `<video>` element metadata smoke test.
+
+### 5. Export History & Persistence
+- Validated exports are registered in `project.json` under `exports: ProjectExport[]`, keeping `schemaVersion: 1` backwards compatibility.
+- Users can view and download previous exports directly from the Export modal.
 
 ---
 

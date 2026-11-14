@@ -39,6 +39,7 @@ import { MediaPreviewPlayer } from "./MediaPreviewPlayer.tsx";
 import { TimelineEditor } from "./editor/TimelineEditor.tsx";
 import { TimelinePreview } from "./editor/TimelinePreview.tsx";
 import { ClipInspector } from "./editor/ClipInspector.tsx";
+import { ExportModal } from "./editor/ExportModal.tsx";
 import {
   Button,
   IconButton,
@@ -93,6 +94,9 @@ export function ProjectWorkspace({
 
   // Remove asset modal state
   const [assetToRemove, setAssetToRemove] = useState<ProjectAsset | null>(null);
+
+  // Export modal state (Phase 5)
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // ─── Timeline state ─────────────────────────────────────────────────────────
 
@@ -579,6 +583,20 @@ export function ProjectWorkspace({
               <Button variant="secondary" size="sm" onClick={() => saveQueue.retry()}>Retry</Button>
             </div>
           )}
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setIsExportModalOpen(true)}
+            title="Export video (Render to file)"
+            className="flex items-center gap-1.5"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" strokeWidth="2.5" stroke="currentColor">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            <span>Export</span>
+          </Button>
           <Button variant="secondary" size="sm" onClick={handleCloseProject}>Close</Button>
         </div>
       </div>
@@ -686,6 +704,24 @@ export function ProjectWorkspace({
           </div>
         )}
       </Modal>
+
+      {/* Export Modal (Phase 5) */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        project={doc}
+        timeline={timeline}
+        liveAssets={liveAssets}
+        workspaceHandle={workspaceHandle}
+        onClose={() => setIsExportModalOpen(false)}
+        onExportSuccess={(newExport) => {
+          const existing = doc.exports || [];
+          const updated = {
+            ...doc,
+            exports: [newExport, ...existing],
+          } as ProjectDocumentWithTimeline;
+          updateProject(updated);
+        }}
+      />
     </div>
   );
 }
