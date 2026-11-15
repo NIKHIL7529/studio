@@ -8,7 +8,7 @@ import * as React from "react";
 import { useState } from "react";
 import type { SequenceDocument } from "../../types/timeline.ts";
 import type { ExportAspectRatio } from "../../types/export.ts";
-import { Button, IconButton, Modal, Badge } from "@/components/ui";
+import { Button, Modal } from "@/components/ui";
 
 export interface SequenceSelectorProps {
   sequences: SequenceDocument[];

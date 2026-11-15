@@ -77,15 +77,36 @@ function wrapTextToLines(
 ): string[] {
   const paragraphs = text.split("\n");
   const resultLines: string[] = [];
+  const measure = (str: string) =>
+    typeof ctx.measureText === "function" ? ctx.measureText(str).width : str.length * 10;
 
   for (const para of paragraphs) {
-    const words = para.split(/\s+/).filter(Boolean);
-    if (words.length === 0) continue;
+    const rawWords = para.split(/\s+/).filter(Boolean);
+    if (rawWords.length === 0) continue;
+
+    // Break any word that by itself exceeds maxWidth into chunks so long words don't overflow
+    const words: string[] = [];
+    for (const w of rawWords) {
+      if (measure(w) > maxWidth && maxWidth > 20) {
+        let chunk = "";
+        for (const char of w) {
+          if (measure(chunk + char) > maxWidth && chunk.length > 0) {
+            words.push(chunk);
+            chunk = char;
+          } else {
+            chunk += char;
+          }
+        }
+        if (chunk) words.push(chunk);
+      } else {
+        words.push(w);
+      }
+    }
 
     let currentLine = words[0];
     for (let w = 1; w < words.length; w++) {
       const testLine = `${currentLine} ${words[w]}`;
-      const width = typeof ctx.measureText === "function" ? ctx.measureText(testLine).width : testLine.length * 10;
+      const width = measure(testLine);
       if (width > maxWidth) {
         resultLines.push(currentLine);
         currentLine = words[w];
@@ -109,8 +130,8 @@ export function renderTextOverlayToCanvas(
   canvasHeight: number
 ): void {
   ctx.save();
-  const px = overlay.x * canvasWidth;
-  const py = overlay.y * canvasHeight;
+  let px = overlay.x * canvasWidth;
+  let py = overlay.y * canvasHeight;
 
   // Scale font size proportionally to 720p base height
   const scale = canvasHeight / 720;
@@ -126,7 +147,7 @@ export function renderTextOverlayToCanvas(
   const lines = wrapTextToLines(ctx, overlay.text, maxTextWidth);
   const lineHeight = fontSize * 1.35;
   const totalHeight = lines.length * lineHeight;
-  const startY = py - totalHeight / 2 + lineHeight / 2;
+  let startY = py - totalHeight / 2 + lineHeight / 2;
 
   // Render background box/pill if requested (typical for captions or bold presets)
   const isCaption = overlay.overlayType === "caption";
@@ -146,8 +167,31 @@ export function renderTextOverlayToCanvas(
     const padY = Math.round(10 * scale);
     const boxW = maxLineWidth + padX * 2;
     const boxH = totalHeight + padY * 2;
-    const boxX = px - (overlay.align === "left" ? 0 : overlay.align === "right" ? boxW : boxW / 2);
-    const boxY = py - totalHeight / 2 - padY;
+    let boxX =
+      overlay.align === "left"
+        ? px - padX
+        : overlay.align === "right"
+        ? px - boxW + padX
+        : px - boxW / 2;
+    let boxY = py - totalHeight / 2 - padY;
+
+    // Enforce safe margins (5% safe area on boundaries)
+    const safeMarginX = canvasWidth * 0.05;
+    const safeMarginY = canvasHeight * 0.05;
+    if (boxW <= canvasWidth - 2 * safeMarginX) {
+      const clampedBoxX = Math.max(safeMarginX, Math.min(canvasWidth - safeMarginX - boxW, boxX));
+      const dx = clampedBoxX - boxX;
+      boxX = clampedBoxX;
+      px += dx;
+    }
+    if (boxH <= canvasHeight - 2 * safeMarginY) {
+      const clampedBoxY = Math.max(safeMarginY, Math.min(canvasHeight - safeMarginY - boxH, boxY));
+      const dy = clampedBoxY - boxY;
+      boxY = clampedBoxY;
+      py += dy;
+      startY += dy;
+    }
+
     const radius = Math.round(8 * scale);
 
     ctx.fillStyle = bgColor;

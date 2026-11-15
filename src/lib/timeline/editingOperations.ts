@@ -17,7 +17,7 @@ import type {
   TimelineMarker,
   TrackType,
 } from "../../types/timeline.ts";
-import { splitClip, validateTimeline } from "./model.ts";
+import { splitClip } from "./model.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -558,7 +558,8 @@ export function insertEdit(
   sourceIn: number,
   sourceOut: number,
   insertTime: number,
-  syncLockedTracks: boolean = true
+  syncLockedTracks: boolean = true,
+  audioTrackId?: string
 ): TimelineDocument {
   const track = timeline.tracks.find((t) => t.id === targetTrackId);
   if (!track || track.locked) return timeline;
@@ -570,10 +571,14 @@ export function insertEdit(
 
   // 1. Split existing clip if insertTime splits one
   let workingTimeline = razorSplitAtPlayhead(timeline, insertTime, targetTrackId);
+  if (audioTrackId) {
+    workingTimeline = razorSplitAtPlayhead(workingTimeline, insertTime, audioTrackId);
+  }
 
   // 2. Ripple downstream clips
   const affectedTrackIds = new Set<string>();
   affectedTrackIds.add(targetTrackId);
+  if (audioTrackId) affectedTrackIds.add(audioTrackId);
   if (syncLockedTracks) {
     for (const t of workingTimeline.tracks) {
       if (t.syncLocked) affectedTrackIds.add(t.id);
@@ -594,9 +599,12 @@ export function insertEdit(
     };
   });
 
-  // 3. Create and append the new inserted clip
+  // 3. Create and append the new inserted clip (with optional linked audio clip)
+  const videoClipId = crypto.randomUUID();
+  const audioClipId = audioTrackId ? crypto.randomUUID() : undefined;
+
   const newClip: TimelineClip = {
-    id: crypto.randomUUID(),
+    id: videoClipId,
     assetId,
     trackId: targetTrackId,
     startTime: insertTime,
@@ -604,37 +612,46 @@ export function insertEdit(
     sourceOut,
     volume: 1,
     muted: false,
+    linkedClipId: audioClipId,
   };
+
+  const newAudioClip: TimelineClip | null = audioTrackId && audioClipId ? {
+    id: audioClipId,
+    assetId,
+    trackId: audioTrackId,
+    startTime: insertTime,
+    sourceIn,
+    sourceOut,
+    volume: 1,
+    muted: false,
+    linkedClipId: videoClipId,
+  } : null;
 
   return {
     ...workingTimeline,
-    tracks: rippledTracks.map((t) =>
-      t.id === targetTrackId ? { ...t, clips: [...t.clips, newClip] } : t
-    ),
+    tracks: rippledTracks.map((t) => {
+      if (t.id === targetTrackId) {
+        return { ...t, clips: [...t.clips, newClip] };
+      }
+      if (newAudioClip && t.id === audioTrackId) {
+        return { ...t, clips: [...t.clips, newAudioClip] };
+      }
+      return t;
+    }),
   };
 }
 
-/**
- * Overwrites targetTrackId from overwriteTime for the source range duration.
- * Does NOT shift downstream clips. Trims or splits overlapping existing clips.
- */
-export function overwriteEdit(
-  timeline: TimelineDocument,
-  targetTrackId: string,
+function overwriteTrackClips(
+  track: TimelineTrack,
   assetId: string,
   sourceIn: number,
   sourceOut: number,
-  overwriteTime: number
-): TimelineDocument {
-  const track = timeline.tracks.find((t) => t.id === targetTrackId);
-  if (!track || track.locked) return timeline;
-
-  if (sourceOut <= sourceIn) {
-    throw new Error("overwriteEdit: sourceOut must be greater than sourceIn");
-  }
+  overwriteTime: number,
+  clipId: string,
+  linkedClipId?: string
+): TimelineClip[] {
   const duration = sourceOut - sourceIn;
   const overwriteEnd = overwriteTime + duration;
-
   const newClips: TimelineClip[] = [];
 
   for (const clip of track.clips) {
@@ -649,18 +666,15 @@ export function overwriteEdit(
 
     // Case 2: Clip is completely covered by overwrite window
     if (clip.startTime >= overwriteTime - 0.0001 && clipEnd <= overwriteEnd + 0.0001) {
-      // Discard completely covered clip
       continue;
     }
 
-    // Case 3: Overwrite cuts into the middle of the clip (clip contains the overwrite window)
+    // Case 3: Overwrite cuts into the middle of the clip
     if (clip.startTime < overwriteTime - 0.0001 && clipEnd > overwriteEnd + 0.0001) {
-      // Left part
       const leftPart: TimelineClip = {
         ...clip,
         sourceOut: clip.sourceIn + (overwriteTime - clip.startTime),
       };
-      // Right part
       const rightPart: TimelineClip = {
         ...clip,
         id: crypto.randomUUID(),
@@ -696,22 +710,74 @@ export function overwriteEdit(
 
   // Insert the newly placed overwrite clip
   const placedClip: TimelineClip = {
-    id: crypto.randomUUID(),
+    id: clipId,
     assetId,
-    trackId: targetTrackId,
+    trackId: track.id,
     startTime: overwriteTime,
     sourceIn,
     sourceOut,
     volume: 1,
     muted: false,
+    linkedClipId,
   };
   newClips.push(placedClip);
+  return newClips;
+}
+
+/**
+ * Overwrites targetTrackId from overwriteTime for the source range duration.
+ * Does NOT shift downstream clips. Trims or splits overlapping existing clips.
+ * Supports creating linked audio clips on audioTrackId when provided.
+ */
+export function overwriteEdit(
+  timeline: TimelineDocument,
+  targetTrackId: string,
+  assetId: string,
+  sourceIn: number,
+  sourceOut: number,
+  overwriteTime: number,
+  audioTrackId?: string
+): TimelineDocument {
+  const track = timeline.tracks.find((t) => t.id === targetTrackId);
+  if (!track || track.locked) return timeline;
+
+  if (sourceOut <= sourceIn) {
+    throw new Error("overwriteEdit: sourceOut must be greater than sourceIn");
+  }
+
+  const audioTrack = audioTrackId ? timeline.tracks.find((t) => t.id === audioTrackId && !t.locked) : undefined;
+  const videoClipId = crypto.randomUUID();
+  const audioClipId = audioTrack ? crypto.randomUUID() : undefined;
+
+  const updatedTargetClips = overwriteTrackClips(
+    track,
+    assetId,
+    sourceIn,
+    sourceOut,
+    overwriteTime,
+    videoClipId,
+    audioClipId
+  );
+
+  const updatedAudioClips = audioTrack
+    ? overwriteTrackClips(
+        audioTrack,
+        assetId,
+        sourceIn,
+        sourceOut,
+        overwriteTime,
+        audioClipId!,
+        videoClipId
+      )
+    : null;
 
   return {
     ...timeline,
-    tracks: timeline.tracks.map((t) =>
-      t.id === targetTrackId ? { ...t, clips: newClips } : t
-    ),
+    tracks: timeline.tracks.map((t) => {
+      if (t.id === targetTrackId) return { ...t, clips: updatedTargetClips };
+      if (audioTrack && t.id === audioTrack.id && updatedAudioClips) return { ...t, clips: updatedAudioClips };
+      return t;
+    }),
   };
 }
 
@@ -1028,7 +1094,7 @@ export function pasteClips(
   const minStartTime = copiedClips[0].startTime;
   const timeOffset = pasteTime - minStartTime;
 
-  let current = deepCloneTimeline(timeline);
+  const current = deepCloneTimeline(timeline);
 
   for (const orig of copiedClips) {
     const destTrackId = targetTrackId && copiedClips.length === 1 ? targetTrackId : orig.trackId;

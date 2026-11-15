@@ -59,11 +59,11 @@ export interface RepurposeConfig {
   targetDuration?: number;
   /** Optional target duration range */
   targetDurationRange?: { min: number; max: number };
-  /** Preferred number of outputs/clips when specified by user */
-  targetClipCount: number;
-  /** Soft guidance bounds (not hard filters) */
-  minClipDuration: number;
-  maxClipDuration: number;
+  /** Optional preferred number of outputs/clips when explicitly specified by user (non-binding guidance) */
+  targetClipCount?: number;
+  /** Optional soft guidance bounds (not hard filters) */
+  minClipDuration?: number;
+  maxClipDuration?: number;
   targetAspectRatio: ExportAspectRatio;
   keywords: string[];
   selectedAssetIds: string[];

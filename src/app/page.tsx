@@ -1,8 +1,7 @@
+"use client";
+
 /**
  * Root page — renders the application shell and home/workspace entry screen.
- *
- * This is a Server Component. The AppShell and WorkspaceHome components
- * include "use client" only where browser APIs are needed.
  */
 
 import { AppShell } from "@/components/AppShell";

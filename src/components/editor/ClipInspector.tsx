@@ -19,6 +19,15 @@ import {
   moveTextOverlay,
   createTextOverlay,
 } from "../../lib/timeline/model.ts";
+import {
+  renameTrack,
+  removeTrack,
+  toggleTrackLock,
+  toggleTrackMute,
+  toggleTrackSolo,
+  toggleTrackHidden,
+  toggleTrackSyncLock,
+} from "../../lib/timeline/editingOperations.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { Button, Badge, PanelHeader } from "@/components/ui";
 
@@ -26,10 +35,12 @@ export interface ClipInspectorProps {
   timeline: TimelineDocument;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  selectedTrackId?: string | null;
   liveAssets: Map<string, LiveAssetItem>;
   currentTime: number;
   onTimelineChange: (t: TimelineDocument) => void;
   onAddTextOverlay: (overlay: TextOverlay) => void;
+  onSelectTrack?: (trackId: string | null) => void;
 }
 
 // ─── Clip Inspector ──────────────────────────────────────────────────────────
@@ -461,6 +472,16 @@ function OverlayPanel({
             onChange={(v) => patch({ y: v / 100 })}
           />
         </div>
+        {(overlay.x < 0.05 || overlay.x > 0.95 || overlay.y < 0.05 || overlay.y > 0.95) && (
+          <div className="flex items-center gap-1.5 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[11px] mt-1">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <span>Outside recommended 5% title safe margin</span>
+          </div>
+        )}
       </div>
 
       {/* Delete */}
@@ -523,19 +544,228 @@ function EmptyPanel({
   );
 }
 
+// ─── Track Panel ─────────────────────────────────────────────────────────────
+
+function TrackPanel({
+  track,
+  timeline,
+  onTimelineChange,
+  onDeselect,
+}: {
+  track: import("../../types/timeline.ts").TimelineTrack;
+  timeline: TimelineDocument;
+  onTimelineChange: (t: TimelineDocument) => void;
+  onDeselect: () => void;
+}) {
+  const [nameVal, setNameVal] = useState(track.name);
+  const isVideo = track.type === "video";
+
+  const handleNameBlur = () => {
+    if (nameVal.trim() && nameVal.trim() !== track.name) {
+      onTimelineChange(renameTrack(timeline, track.id, nameVal.trim()));
+    } else {
+      setNameVal(track.name);
+    }
+  };
+
+  const handleVolumeChange = (newVol: number) => {
+    onTimelineChange({
+      ...timeline,
+      tracks: timeline.tracks.map((t) => (t.id === track.id ? { ...t, volume: newVol } : t)),
+    });
+  };
+
+  const handleHeightChange = (height: "compact" | "normal" | "expanded") => {
+    onTimelineChange({
+      ...timeline,
+      tracks: timeline.tracks.map((t) => (t.id === track.id ? { ...t, height } : t)),
+    });
+  };
+
+  const handleDelete = () => {
+    onDeselect();
+    onTimelineChange(removeTrack(timeline, track.id));
+  };
+
+  return (
+    <div className="flex flex-col gap-4 p-3 select-none">
+      {/* Header */}
+      <div className="flex flex-col gap-1.5">
+        <SectionLabel>Track</SectionLabel>
+        <div className="flex items-center gap-2 mt-0.5">
+          <div className="shrink-0 w-7 h-7 rounded bg-cs-bg-muted flex items-center justify-center border border-cs-border-subtle">
+            <span className="text-sm">{isVideo ? "🎬" : "🔊"}</span>
+          </div>
+          <div className="flex flex-col min-w-0 flex-1">
+            <input
+              type="text"
+              value={nameVal}
+              onChange={(e) => setNameVal(e.target.value)}
+              onBlur={handleNameBlur}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleNameBlur();
+              }}
+              className="text-xs font-semibold text-cs-text-primary bg-transparent border-b border-transparent hover:border-cs-border-default focus:border-cs-accent focus:outline-none transition-colors truncate"
+              title="Click to edit track name"
+            />
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <Badge variant={isVideo ? "default" : "info"}>{track.type.toUpperCase()}</Badge>
+              <span className="text-[11px] text-cs-text-tertiary">
+                {track.clips.length} {track.clips.length === 1 ? "clip" : "clips"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Toggles */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Track Controls</SectionLabel>
+        <div className="grid grid-cols-2 gap-1.5">
+          {/* Mute */}
+          <button
+            onClick={() => onTimelineChange(toggleTrackMute(timeline, track.id))}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border transition-colors ${
+              track.muted
+                ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+            }`}
+          >
+            <span>Mute</span>
+            <span>{track.muted ? "ON" : "OFF"}</span>
+          </button>
+
+          {/* Solo */}
+          <button
+            onClick={() => onTimelineChange(toggleTrackSolo(timeline, track.id))}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border transition-colors ${
+              track.solo
+                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+            }`}
+          >
+            <span>Solo</span>
+            <span>{track.solo ? "ON" : "OFF"}</span>
+          </button>
+
+          {/* Video Hidden */}
+          {isVideo && (
+            <button
+              onClick={() => onTimelineChange(toggleTrackHidden(timeline, track.id))}
+              className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border transition-colors ${
+                track.hidden
+                  ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                  : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+              }`}
+            >
+              <span>Hidden</span>
+              <span>{track.hidden ? "YES" : "NO"}</span>
+            </button>
+          )}
+
+          {/* Sync-Lock */}
+          <button
+            onClick={() => onTimelineChange(toggleTrackSyncLock(timeline, track.id))}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border transition-colors ${
+              track.syncLocked !== false
+                ? "bg-sky-500/15 border-sky-500/40 text-sky-300"
+                : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+            }`}
+          >
+            <span>Sync-Lock</span>
+            <span>{track.syncLocked !== false ? "ON" : "OFF"}</span>
+          </button>
+
+          {/* Lock edits */}
+          <button
+            onClick={() => onTimelineChange(toggleTrackLock(timeline, track.id))}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border transition-colors col-span-2 ${
+              track.locked
+                ? "bg-red-500/15 border-red-500/40 text-red-300"
+                : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+            }`}
+          >
+            <span>Lock Track Against Edits</span>
+            <span>{track.locked ? "LOCKED" : "UNLOCKED"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Track Volume / Gain */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Track Gain Multiplier</SectionLabel>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.05}
+            value={track.volume ?? 1}
+            onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+            className="flex-1 accent-cs-accent cursor-pointer"
+          />
+          <span className="text-xs font-mono text-cs-text-secondary w-10 text-right">
+            {Math.round((track.volume ?? 1) * 100)}%
+          </span>
+        </div>
+      </div>
+
+      {/* Track Height */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Track Height</SectionLabel>
+        <div className="flex gap-1">
+          {(["compact", "normal", "expanded"] as const).map((h) => (
+            <button
+              key={h}
+              onClick={() => handleHeightChange(h)}
+              className={`flex-1 h-6 rounded text-[11px] capitalize transition-colors ${
+                (track.height || "normal") === h
+                  ? "bg-cs-primary text-white font-medium"
+                  : "bg-cs-bg-base border border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+              }`}
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Delete Track */}
+      <div className="pt-2 border-t border-cs-border-subtle mt-1">
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={handleDelete}
+          disabled={isVideo && timeline.tracks.filter((t) => t.type === "video").length <= 1}
+          className="w-full"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+          Delete Track
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Export ──────────────────────────────────────────────────────────────
 
 export function ClipInspector({
   timeline,
   selectedClipId,
   selectedOverlayId,
+  selectedTrackId,
   liveAssets,
   currentTime,
   onTimelineChange,
   onAddTextOverlay,
+  onSelectTrack,
 }: ClipInspectorProps) {
   const selectedClip = selectedClipId ? findClip(timeline, selectedClipId) : null;
   const selectedOverlay = selectedOverlayId ? findOverlay(timeline, selectedOverlayId) : null;
+  const selectedTrack = selectedTrackId ? timeline.tracks.find((t) => t.id === selectedTrackId) ?? null : null;
 
   const handleAddOverlay = (overlay: TextOverlay) => {
     onAddTextOverlay(overlay);
@@ -549,8 +779,10 @@ export function ClipInspector({
           selectedClip
             ? "Clip properties"
             : selectedOverlay
-              ? "Text overlay"
-              : "No selection"
+            ? "Text overlay"
+            : selectedTrack
+            ? `Track (${selectedTrack.name})`
+            : "No selection"
         }
       />
 
@@ -567,6 +799,13 @@ export function ClipInspector({
             overlay={selectedOverlay}
             timeline={timeline}
             onTimelineChange={onTimelineChange}
+          />
+        ) : selectedTrack ? (
+          <TrackPanel
+            track={selectedTrack}
+            timeline={timeline}
+            onTimelineChange={onTimelineChange}
+            onDeselect={() => onSelectTrack?.(null)}
           />
         ) : (
           <EmptyPanel

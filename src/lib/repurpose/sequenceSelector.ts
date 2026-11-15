@@ -97,7 +97,7 @@ export function selectCandidateSequence(
   // Determine target constraints
   const softTargetDuration = targetDuration || (targetDurationRange ? targetDurationRange.max : undefined);
   const hasDurationGoal = softTargetDuration !== undefined && softTargetDuration > 0;
-  const maxClipsToPick = targetClipCount > 0 ? targetClipCount : 10;
+  const maxClipsToPick = targetClipCount && targetClipCount > 0 ? targetClipCount : Infinity;
 
   let currentSelectedDuration = 0;
 
@@ -144,9 +144,9 @@ export function selectCandidateSequence(
   if (hasDurationGoal && actualDuration < softTargetDuration * 0.75) {
     isShortage = true;
     shortageExplanation = `Selected moments total ${actualDuration.toFixed(1)}s (${softTargetDuration}s targeted). The source footage did not contain further non-redundant, high-quality segments. We avoid padding with weak material.`;
-  } else if (!hasDurationGoal && actualCount < maxClipsToPick) {
+  } else if (!hasDurationGoal && targetClipCount && targetClipCount > 0 && actualCount < targetClipCount) {
     isShortage = true;
-    shortageExplanation = `Found ${actualCount} valid moment${actualCount === 1 ? "" : "s"} (${maxClipsToPick} requested). The source footage did not yield further strong, non-redundant excerpts.`;
+    shortageExplanation = `Found ${actualCount} valid moment${actualCount === 1 ? "" : "s"} (${targetClipCount} requested). The source footage did not yield further strong, non-redundant excerpts.`;
   }
 
   // 6. Sequence Rationale

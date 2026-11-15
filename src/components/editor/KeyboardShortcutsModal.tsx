@@ -7,7 +7,7 @@
 import * as React from "react";
 import { useState } from "react";
 import { Modal, Button } from "@/components/ui";
-import { KEYBOARD_SHORTCUTS, type KeyboardShortcutDefinition } from "../../lib/timeline/shortcuts.ts";
+import { KEYBOARD_SHORTCUTS } from "../../lib/timeline/shortcuts.ts";
 
 export interface KeyboardShortcutsModalProps {
   isOpen: boolean;

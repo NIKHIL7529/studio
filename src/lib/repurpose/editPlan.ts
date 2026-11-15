@@ -174,7 +174,7 @@ export function applyEditPlanToTimeline(
   // Find or create primary video track
   let videoTrack = t.tracks.find((tr) => tr.type === "video");
   if (!videoTrack) {
-    const vId = crypto.randomUUID();
+    const vId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "track-video-1";
     videoTrack = {
       id: vId,
       type: "video",
@@ -186,13 +186,34 @@ export function applyEditPlanToTimeline(
     t.tracks = [videoTrack, ...t.tracks];
   }
 
-  // Create clips sequentially from edit plan segments
-  const newClips: TimelineClip[] = editPlan.segments.map((seg) => {
+  // Find or create primary audio track
+  let audioTrack = t.tracks.find((tr) => tr.type === "audio");
+  if (!audioTrack) {
+    const aId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "track-audio-1";
+    audioTrack = {
+      id: aId,
+      type: "audio",
+      name: "Audio 1",
+      order: 1,
+      muted: false,
+      clips: [],
+    };
+    t.tracks = [...t.tracks, audioTrack];
+  }
+
+  // Create clips sequentially from edit plan segments for both video and audio
+  const newVideoClips: TimelineClip[] = [];
+  const newAudioClips: TimelineClip[] = [];
+
+  for (const seg of editPlan.segments) {
     const clipId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
       ? crypto.randomUUID()
       : `clip-${seg.id}`;
+    const audioClipId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `audio-${seg.id}`;
 
-    return {
+    newVideoClips.push({
       id: clipId,
       assetId: seg.sourceAssetId,
       trackId: videoTrack.id,
@@ -201,15 +222,34 @@ export function applyEditPlanToTimeline(
       sourceOut: seg.sourceOut,
       volume: 1,
       muted: false,
-    };
-  });
+      linkedClipId: audioClipId,
+    });
 
-  // Assign clips to video track
+    newAudioClips.push({
+      id: audioClipId,
+      assetId: seg.sourceAssetId,
+      trackId: audioTrack.id,
+      startTime: seg.timelineStart,
+      sourceIn: seg.sourceIn,
+      sourceOut: seg.sourceOut,
+      volume: 1,
+      muted: false,
+      linkedClipId: clipId,
+    });
+  }
+
+  // Assign clips to video and audio tracks
   const updatedTracks: TimelineTrack[] = t.tracks.map((tr) => {
-    if (tr.id === videoTrack.id) {
+    if (tr.id === videoTrack!.id) {
       return {
         ...tr,
-        clips: newClips,
+        clips: newVideoClips,
+      };
+    }
+    if (tr.id === audioTrack!.id) {
+      return {
+        ...tr,
+        clips: newAudioClips,
       };
     }
     return tr;

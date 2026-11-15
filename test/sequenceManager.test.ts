@@ -9,7 +9,6 @@ import {
   duplicateSequence,
   renameSequence,
   deleteSequence,
-  updateActiveSequenceTimeline,
 } from "../src/lib/timeline/sequenceManager.ts";
 import type { ProjectDocument } from "../src/types/project.ts";
 
@@ -103,7 +102,7 @@ describe("Sequence and Multi-Composition Management", () => {
     let project = ensureSequencesInitialized(createMockProject());
     const mainSeqId = project.sequences![0].id;
     project = addSequenceToProject(project, { name: "Reel" });
-    const reelSeqId = project.activeSequenceId!;
+    assert.equal(project.sequences?.length, 2);
 
     const switchedBack = setActiveSequence(project, mainSeqId);
     assert.equal(switchedBack.activeSequenceId, mainSeqId);

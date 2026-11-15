@@ -201,7 +201,7 @@ export function buildRenderPlan(
 
   // Sort tracks by UI order (lower order renders higher / top-most)
   const sortedTracks = [...timelineSnapshot.tracks].sort((a, b) => a.order - b.order);
-  const videoTracks = sortedTracks.filter((t) => t.type === "video");
+  const videoTracks = sortedTracks.filter((t) => t.type === "video" && !t.hidden);
 
   // Generate deterministic frame sequence
   const videoFrames: RenderPlanVideoFrame[] = [];
@@ -234,12 +234,11 @@ export function buildRenderPlan(
       if (activeClip) break;
     }
 
-    // Find active text overlays spanning this time (invariant: at most 1 at any moment)
-    const matchingOverlays = timelineSnapshot.textOverlays.filter(
+    // Find active text overlays spanning this time
+    const activeOverlays = timelineSnapshot.textOverlays.filter(
       (overlay) =>
         presentationTimeSeconds >= overlay.startTime && presentationTimeSeconds < overlay.endTime
     );
-    const activeOverlays = matchingOverlays.slice(0, 1);
 
     videoFrames.push({
       frameIndex,
@@ -253,6 +252,8 @@ export function buildRenderPlan(
 
   // Generate audio segments
   const audioSegments: RenderPlanAudioSegment[] = [];
+  const anyAudioSolo = sortedTracks.some((t) => t.type === "audio" && t.solo);
+
   for (const track of sortedTracks) {
     for (const clip of track.clips) {
       const source = sources.get(clip.assetId);
@@ -261,11 +262,23 @@ export function buildRenderPlan(
         continue;
       }
 
+      // If this is a video track clip linked to an audio clip on an audio track,
+      // the audio track clip is authoritative: skip the video clip to prevent double audio.
+      if (track.type === "video" && clip.linkedClipId) {
+        const hasLinkedAudio = timelineSnapshot.tracks.some(
+          (t) => t.type === "audio" && t.clips.some((c) => c.id === clip.linkedClipId)
+        );
+        if (hasLinkedAudio) {
+          continue;
+        }
+      }
+
       const clipDuration = clip.sourceOut - clip.sourceIn;
       if (clipDuration <= 0) continue;
 
-      const isMuted = track.muted || clip.muted;
-      const volume = isMuted ? 0 : Math.max(0, Math.min(1, clip.volume ?? 1));
+      const isMuted = track.muted || clip.muted || (anyAudioSolo && !track.solo);
+      const trackGain = track.volume !== undefined ? Math.max(0, track.volume) : 1;
+      const volume = isMuted ? 0 : Math.max(0, Math.min(2, (clip.volume ?? 1) * trackGain));
 
       audioSegments.push({
         clipId: clip.id,

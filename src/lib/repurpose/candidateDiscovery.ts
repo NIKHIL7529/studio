@@ -140,8 +140,12 @@ export function discoverSourceCandidates(
   config: RepurposeConfig
 ): RawCandidateWindow[] {
   const sourceDuration = analysis.duration;
-  const minBound = config?.minClipDuration ? Math.max(2.5, config.minClipDuration * 0.85) : 3.0;
-  const maxBound = config?.maxClipDuration ? config.maxClipDuration * 1.15 : 60.0;
+  const minBound = config?.minClipDuration !== undefined && config.minClipDuration > 0
+    ? Math.max(1.5, config.minClipDuration * 0.85)
+    : 2.0;
+  const maxBound = config?.maxClipDuration !== undefined && config.maxClipDuration > 0
+    ? config.maxClipDuration * 1.15
+    : Math.max(180.0, sourceDuration);
 
   if (sourceDuration < minBound || !Number.isFinite(sourceDuration) || (!analysis.hasVideo && !analysis.hasAudio)) {
     return [];
@@ -204,7 +208,7 @@ export function discoverSourceCandidates(
         const combinedOut = c2.sourceOut;
         const combinedDur = Number((combinedOut - combinedIn).toFixed(2));
 
-        if (combinedDur >= 8.0 && combinedDur <= 60.0 && combinedDur < sourceDuration * 0.9) {
+        if (combinedDur >= 6.0 && combinedDur <= maxBound && combinedDur < sourceDuration * 0.95) {
           const key = `${combinedIn.toFixed(1)}-${combinedOut.toFixed(1)}`;
           if (!seenIntervals.has(key)) {
             seenIntervals.add(key);

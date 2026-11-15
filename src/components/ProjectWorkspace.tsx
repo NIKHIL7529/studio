@@ -140,8 +140,33 @@ export function ProjectWorkspace({
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+
+  const handleSelectClip = useCallback((clipId: string | null) => {
+    setSelectedClipId(clipId);
+    if (clipId) {
+      setSelectedOverlayId(null);
+      setSelectedTrackId(null);
+    }
+  }, []);
+
+  const handleSelectOverlay = useCallback((overlayId: string | null) => {
+    setSelectedOverlayId(overlayId);
+    if (overlayId) {
+      setSelectedClipId(null);
+      setSelectedTrackId(null);
+    }
+  }, []);
+
+  const handleSelectTrack = useCallback((trackId: string | null) => {
+    setSelectedTrackId(trackId);
+    if (trackId) {
+      setSelectedClipId(null);
+      setSelectedOverlayId(null);
+    }
+  }, []);
 
   const timelineRef = useRef(timeline);
   useEffect(() => {
@@ -303,18 +328,49 @@ export function ProjectWorkspace({
 
   const handleInsertEdit = useCallback(
     (assetId: string, sIn: number, sOut: number, targetTrackId: string) => {
-      const updated = insertEdit(timelineRef.current, targetTrackId, assetId, sIn, sOut, currentTime, true);
+      const targetTrack = timelineRef.current.tracks.find((t) => t.id === targetTrackId);
+      const liveItem = liveAssets.get(assetId);
+      const hasAudio = (liveItem?.asset.metadata?.audioTracks?.length ?? 0) > 0 || liveItem?.asset.mediaType === "audio";
+      const audioTrack = targetTrack?.type === "video" && hasAudio
+        ? timelineRef.current.tracks.find((t) => t.type === "audio")
+        : undefined;
+
+      const updated = insertEdit(
+        timelineRef.current,
+        targetTrackId,
+        assetId,
+        sIn,
+        sOut,
+        currentTime,
+        true,
+        audioTrack?.id
+      );
       handleTimelineChange(updated);
     },
-    [currentTime, handleTimelineChange]
+    [currentTime, handleTimelineChange, liveAssets]
   );
 
   const handleOverwriteEdit = useCallback(
     (assetId: string, sIn: number, sOut: number, targetTrackId: string) => {
-      const updated = overwriteEdit(timelineRef.current, targetTrackId, assetId, sIn, sOut, currentTime);
+      const targetTrack = timelineRef.current.tracks.find((t) => t.id === targetTrackId);
+      const liveItem = liveAssets.get(assetId);
+      const hasAudio = (liveItem?.asset.metadata?.audioTracks?.length ?? 0) > 0 || liveItem?.asset.mediaType === "audio";
+      const audioTrack = targetTrack?.type === "video" && hasAudio
+        ? timelineRef.current.tracks.find((t) => t.type === "audio")
+        : undefined;
+
+      const updated = overwriteEdit(
+        timelineRef.current,
+        targetTrackId,
+        assetId,
+        sIn,
+        sOut,
+        currentTime,
+        audioTrack?.id
+      );
       handleTimelineChange(updated);
     },
-    [currentTime, handleTimelineChange]
+    [currentTime, handleTimelineChange, liveAssets]
   );
 
   const handleSeek = useCallback((time: number) => {
@@ -843,6 +899,7 @@ export function ProjectWorkspace({
           isPlaying={isPlaying}
           selectedClipId={selectedClipId}
           selectedOverlayId={selectedOverlayId}
+          selectedTrackId={selectedTrackId}
           sourceAssetId={sourceAssetId}
           canUndo={canUndo}
           canRedo={canRedo}
@@ -856,8 +913,9 @@ export function ProjectWorkspace({
           onSeek={handleSeek}
           onPlayPause={handlePlayPause}
           onPlaybackTimeUpdate={handlePlaybackTimeUpdate}
-          onSelectClip={setSelectedClipId}
-          onSelectOverlay={setSelectedOverlayId}
+          onSelectClip={handleSelectClip}
+          onSelectOverlay={handleSelectOverlay}
+          onSelectTrack={handleSelectTrack}
           onSelectSourceAsset={setSourceAssetId}
           onInsertEdit={handleInsertEdit}
           onOverwriteEdit={handleOverwriteEdit}
@@ -1099,7 +1157,25 @@ function LibraryMode({
   );
 }
 
-// ─── Editor Mode ──────────────────────────────────────────────────────────────
+// ─── Editor Mode & Resizable Workspace ─────────────────────────────────────────
+
+interface WorkspaceLayoutPrefs {
+  leftWidth: number;
+  rightWidth: number;
+  timelineHeight: number;
+  leftOpen: boolean;
+  rightOpen: boolean;
+  monitorView: "dual" | "program" | "source";
+}
+
+const DEFAULT_LAYOUT: WorkspaceLayoutPrefs = {
+  leftWidth: 260,
+  rightWidth: 260,
+  timelineHeight: 280,
+  leftOpen: true,
+  rightOpen: true,
+  monitorView: "dual",
+};
 
 function EditorMode({
   doc,
@@ -1109,6 +1185,7 @@ function EditorMode({
   isPlaying,
   selectedClipId,
   selectedOverlayId,
+  selectedTrackId,
   sourceAssetId,
   canUndo,
   canRedo,
@@ -1124,6 +1201,7 @@ function EditorMode({
   onPlaybackTimeUpdate,
   onSelectClip,
   onSelectOverlay,
+  onSelectTrack,
   onSelectSourceAsset,
   onInsertEdit,
   onOverwriteEdit,
@@ -1143,6 +1221,7 @@ function EditorMode({
   isPlaying: boolean;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  selectedTrackId?: string | null;
   sourceAssetId: string | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -1158,6 +1237,7 @@ function EditorMode({
   onPlaybackTimeUpdate: (time: number) => void;
   onSelectClip: (id: string | null) => void;
   onSelectOverlay: (id: string | null) => void;
+  onSelectTrack?: (id: string | null) => void;
   onSelectSourceAsset: (id: string) => void;
   onInsertEdit: (assetId: string, sIn: number, sOut: number, targetTrackId: string) => void;
   onOverwriteEdit: (assetId: string, sIn: number, sOut: number, targetTrackId: string) => void;
@@ -1170,11 +1250,93 @@ function EditorMode({
   onRedo: () => void;
   onAddTextOverlay: (overlay: TextOverlay) => void;
 }) {
-  const [monitorView, setMonitorView] = useState<"program" | "dual" | "source">("dual");
+  const [layoutPrefs, setLayoutPrefs] = useState<WorkspaceLayoutPrefs>(() => {
+    if (typeof window === "undefined") return DEFAULT_LAYOUT;
+    try {
+      const stored = localStorage.getItem("cs_workspace_layout_prefs");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return { ...DEFAULT_LAYOUT, ...parsed };
+      }
+    } catch { /* ignored */ }
+    return DEFAULT_LAYOUT;
+  });
+
+  const updateLayout = useCallback((patch: Partial<WorkspaceLayoutPrefs>) => {
+    setLayoutPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        localStorage.setItem("cs_workspace_layout_prefs", JSON.stringify(next));
+      } catch { /* ignored */ }
+      return next;
+    });
+  }, []);
+
   const sourceAsset = (sourceAssetId ? doc.assets.find((a) => a.id === sourceAssetId) : null) || doc.assets[0] || null;
 
+  // Splitter Resize Handlers
+  const handleLeftResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = layoutPrefs.leftWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(180, Math.min(480, startWidth + delta));
+      updateLayout({ leftWidth: newWidth, leftOpen: true });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleRightResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = layoutPrefs.rightWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = startX - moveEvent.clientX;
+      const newWidth = Math.max(200, Math.min(480, startWidth + delta));
+      updateLayout({ rightWidth: newWidth, rightOpen: true });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const handleTimelineResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = layoutPrefs.timelineHeight;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = startY - moveEvent.clientY;
+      const newHeight = Math.max(160, Math.min(550, startHeight + delta));
+      updateLayout({ timelineHeight: newHeight });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-cs-bg-base select-none">
       {/* Sequence Switcher Bar */}
       {doc.sequences && doc.sequences.length > 0 && (
         <SequenceSelector
@@ -1188,45 +1350,76 @@ function EditorMode({
         />
       )}
 
-      {/* Upper area: sidebar + preview + inspector */}
-      <div className="flex flex-1 overflow-hidden min-h-0" style={{ minHeight: 0 }}>
+      {/* Upper area: sidebar + preview monitors + inspector */}
+      <div className="flex flex-1 overflow-hidden min-h-0 relative" style={{ minHeight: 0 }}>
         {/* Left sidebar: Media Library */}
-        <div
-          className="shrink-0 flex flex-col border-r border-cs-border-subtle bg-cs-bg-surface overflow-hidden"
-          style={{ width: 240 }}
-        >
-          <MediaLibraryPanel
-            doc={doc}
-            liveAssets={liveAssets}
-            selectedAssetId={sourceAssetId}
-            isImporting={isImporting}
-            importError={importError}
-            onImport={onImport}
-            onSelectAsset={onSelectSourceAsset}
-            onAuthorize={() => {}}
-            onRelink={onRelink}
-            onRemove={onRemove}
-            onDismissImportError={onDismissImportError}
-            compact
+        {layoutPrefs.leftOpen ? (
+          <div
+            className="shrink-0 flex flex-col border-r border-cs-border-subtle bg-cs-bg-surface overflow-hidden relative"
+            style={{ width: layoutPrefs.leftWidth }}
+          >
+            <div className="absolute top-1.5 right-1.5 z-20">
+              <button
+                onClick={() => updateLayout({ leftOpen: false })}
+                className="w-5 h-5 rounded flex items-center justify-center bg-cs-bg-base hover:bg-cs-bg-elevated text-cs-text-tertiary hover:text-cs-text-primary text-[10px] transition-colors"
+                title="Collapse Media Panel"
+              >
+                ◀
+              </button>
+            </div>
+            <MediaLibraryPanel
+              doc={doc}
+              liveAssets={liveAssets}
+              selectedAssetId={sourceAssetId}
+              isImporting={isImporting}
+              importError={importError}
+              onImport={onImport}
+              onSelectAsset={onSelectSourceAsset}
+              onAuthorize={() => {}}
+              onRelink={onRelink}
+              onRemove={onRemove}
+              onDismissImportError={onDismissImportError}
+              compact
+            />
+          </div>
+        ) : (
+          <div
+            className="w-6 shrink-0 bg-cs-bg-surface border-r border-cs-border-subtle flex flex-col items-center py-2 cursor-pointer hover:bg-cs-bg-elevated transition-colors"
+            onClick={() => updateLayout({ leftOpen: true })}
+            title="Expand Media Library"
+          >
+            <span className="text-[10px] text-cs-text-tertiary font-semibold tracking-widest [writing-mode:vertical-lr] rotate-180 mb-2">
+              MEDIA
+            </span>
+            <span className="text-[10px] text-cs-accent">▶</span>
+          </div>
+        )}
+
+        {/* Left Resizer Handle */}
+        {layoutPrefs.leftOpen && (
+          <div
+            onMouseDown={handleLeftResizeStart}
+            className="w-1 hover:w-1.5 bg-transparent hover:bg-cs-accent/60 cursor-col-resize transition-all shrink-0 z-20"
+            title="Drag to resize Media Panel"
           />
-        </div>
+        )}
 
         {/* Center: Dual / Single Monitors */}
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-black">
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-[#09090b]">
           {/* Monitor View Toggle Header */}
           <div className="flex items-center justify-between px-3 py-1 bg-cs-bg-surface border-b border-cs-border-subtle text-xs shrink-0">
             <span className="text-[11px] text-cs-text-tertiary font-semibold uppercase tracking-wider">
-              {monitorView === "dual"
+              {layoutPrefs.monitorView === "dual"
                 ? "Source & Program Monitors"
-                : monitorView === "source"
+                : layoutPrefs.monitorView === "source"
                 ? "Source Monitor"
                 : "Program Monitor"}
             </span>
             <div className="flex items-center gap-1 bg-cs-bg-elevated rounded p-0.5 border border-cs-border-subtle">
               <button
-                onClick={() => setMonitorView("source")}
+                onClick={() => updateLayout({ monitorView: "source" })}
                 className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  monitorView === "source"
+                  layoutPrefs.monitorView === "source"
                     ? "bg-cs-bg-active text-cs-text-primary"
                     : "text-cs-text-tertiary hover:text-cs-text-primary"
                 }`}
@@ -1235,9 +1428,9 @@ function EditorMode({
                 Source
               </button>
               <button
-                onClick={() => setMonitorView("dual")}
+                onClick={() => updateLayout({ monitorView: "dual" })}
                 className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  monitorView === "dual"
+                  layoutPrefs.monitorView === "dual"
                     ? "bg-cs-bg-active text-cs-text-primary"
                     : "text-cs-text-tertiary hover:text-cs-text-primary"
                 }`}
@@ -1246,9 +1439,9 @@ function EditorMode({
                 Dual Monitor
               </button>
               <button
-                onClick={() => setMonitorView("program")}
+                onClick={() => updateLayout({ monitorView: "program" })}
                 className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  monitorView === "program"
+                  layoutPrefs.monitorView === "program"
                     ? "bg-cs-bg-active text-cs-text-primary"
                     : "text-cs-text-tertiary hover:text-cs-text-primary"
                 }`}
@@ -1261,7 +1454,7 @@ function EditorMode({
 
           {/* Monitors Workspace */}
           <div className="flex-1 flex overflow-hidden min-h-0 divide-x divide-cs-border-subtle">
-            {(monitorView === "dual" || monitorView === "source") && (
+            {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "source") && (
               <div className="flex-1 flex flex-col min-w-0">
                 <SourceMonitor
                   asset={sourceAsset}
@@ -1272,7 +1465,7 @@ function EditorMode({
                 />
               </div>
             )}
-            {(monitorView === "dual" || monitorView === "program") && (
+            {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "program") && (
               <div className="flex-1 flex flex-col min-w-0">
                 <TimelinePreview
                   timeline={timeline}
@@ -1287,25 +1480,68 @@ function EditorMode({
           </div>
         </div>
 
-        {/* Right: Inspector */}
-        <div
-          className="shrink-0 overflow-hidden border-l border-cs-border-subtle"
-          style={{ width: 220 }}
-        >
-          <ClipInspector
-            timeline={timeline}
-            selectedClipId={selectedClipId}
-            selectedOverlayId={selectedOverlayId}
-            liveAssets={liveAssets}
-            currentTime={currentTime}
-            onTimelineChange={onTimelineChange}
-            onAddTextOverlay={onAddTextOverlay}
+        {/* Right Resizer Handle */}
+        {layoutPrefs.rightOpen && (
+          <div
+            onMouseDown={handleRightResizeStart}
+            className="w-1 hover:w-1.5 bg-transparent hover:bg-cs-accent/60 cursor-col-resize transition-all shrink-0 z-20"
+            title="Drag to resize Inspector"
           />
-        </div>
+        )}
+
+        {/* Right: Inspector */}
+        {layoutPrefs.rightOpen ? (
+          <div
+            className="shrink-0 overflow-hidden border-l border-cs-border-subtle relative flex flex-col"
+            style={{ width: layoutPrefs.rightWidth }}
+          >
+            <div className="absolute top-1.5 right-1.5 z-20">
+              <button
+                onClick={() => updateLayout({ rightOpen: false })}
+                className="w-5 h-5 rounded flex items-center justify-center bg-cs-bg-base hover:bg-cs-bg-elevated text-cs-text-tertiary hover:text-cs-text-primary text-[10px] transition-colors"
+                title="Collapse Inspector"
+              >
+                ▶
+              </button>
+            </div>
+            <ClipInspector
+              timeline={timeline}
+              selectedClipId={selectedClipId}
+              selectedOverlayId={selectedOverlayId}
+              selectedTrackId={selectedTrackId}
+              liveAssets={liveAssets}
+              currentTime={currentTime}
+              onTimelineChange={onTimelineChange}
+              onAddTextOverlay={onAddTextOverlay}
+              onSelectTrack={onSelectTrack}
+            />
+          </div>
+        ) : (
+          <div
+            className="w-6 shrink-0 bg-cs-bg-surface border-l border-cs-border-subtle flex flex-col items-center py-2 cursor-pointer hover:bg-cs-bg-elevated transition-colors"
+            onClick={() => updateLayout({ rightOpen: true })}
+            title="Expand Inspector"
+          >
+            <span className="text-[10px] text-cs-text-tertiary font-semibold tracking-widest [writing-mode:vertical-lr] rotate-180 mb-2">
+              INSPECTOR
+            </span>
+            <span className="text-[10px] text-cs-accent">◀</span>
+          </div>
+        )}
       </div>
 
+      {/* Horizontal Timeline Resizer Handle */}
+      <div
+        onMouseDown={handleTimelineResizeStart}
+        className="h-1 hover:h-1.5 bg-transparent hover:bg-cs-accent/60 cursor-row-resize transition-all shrink-0 z-20"
+        title="Drag to resize Timeline"
+      />
+
       {/* Bottom: Timeline Editor */}
-      <div className="shrink-0 overflow-hidden border-t border-cs-border-subtle" style={{ height: "38%" }}>
+      <div
+        className="shrink-0 overflow-hidden border-t border-cs-border-subtle"
+        style={{ height: layoutPrefs.timelineHeight }}
+      >
         <TimelineEditor
           timeline={timeline}
           liveAssets={liveAssets}
@@ -1316,8 +1552,10 @@ function EditorMode({
           onPlayPause={onPlayPause}
           selectedClipId={selectedClipId}
           selectedOverlayId={selectedOverlayId}
+          selectedTrackId={selectedTrackId}
           onSelectClip={onSelectClip}
           onSelectOverlay={onSelectOverlay}
+          onSelectTrack={onSelectTrack}
           canUndo={canUndo}
           canRedo={canRedo}
           onUndo={onUndo}

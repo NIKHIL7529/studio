@@ -49,36 +49,39 @@ export function SourceMonitor({
 
   // Target track state
   const defaultTrack = timeline.tracks.find((t) => t.type === (asset?.mediaType === "audio" ? "audio" : "video")) || timeline.tracks[0];
-  const [targetTrackId, setTargetTrackId] = useState<string>(defaultTrack?.id || "");
-
-  useEffect(() => {
-    if (defaultTrack && !timeline.tracks.some((t) => t.id === targetTrackId)) {
-      setTargetTrackId(defaultTrack.id);
-    }
-  }, [timeline.tracks, defaultTrack, targetTrackId]);
+  const [userSelectedTrackId, setUserSelectedTrackId] = useState<string | null>(null);
+  const targetTrackId = (userSelectedTrackId && timeline.tracks.some((t) => t.id === userSelectedTrackId))
+    ? userSelectedTrackId
+    : (defaultTrack?.id || "");
 
   // Load media file handle into URL
   useEffect(() => {
     const manager = urlManagerRef.current;
-    if (!asset || !liveItem?.file) {
-      setMediaUrl(null);
-      setCurrentTime(0);
-      setDuration(0);
-      setInPoint(null);
-      setOutPoint(null);
-      return;
-    }
+    let cancelled = false;
 
-    const url = manager.create(liveItem.file);
-    setMediaUrl(url);
-    setCurrentTime(0);
-    setInPoint(0);
-    const assetDuration = asset.metadata?.duration || 0;
-    setDuration(assetDuration);
-    setOutPoint(assetDuration > 0 ? assetDuration : null);
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (!asset || !liveItem?.file) {
+        setMediaUrl(null);
+        setCurrentTime(0);
+        setDuration(0);
+        setInPoint(null);
+        setOutPoint(null);
+        return;
+      }
+
+      const url = manager.create(liveItem.file);
+      setMediaUrl(url);
+      setCurrentTime(0);
+      setInPoint(0);
+      const assetDuration = asset.metadata?.duration || 0;
+      setDuration(assetDuration);
+      setOutPoint(assetDuration > 0 ? assetDuration : null);
+    });
 
     return () => {
-      manager.revoke(url);
+      cancelled = true;
+      manager.revokeAll();
     };
   }, [asset, liveItem?.file]);
 
@@ -178,7 +181,7 @@ export function SourceMonitor({
             <span>Target:</span>
             <select
               value={targetTrackId}
-              onChange={(e) => setTargetTrackId(e.target.value)}
+              onChange={(e) => setUserSelectedTrackId(e.target.value)}
               className="h-6 px-1.5 text-xs rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary focus:outline-none"
             >
               {timeline.tracks.map((t) => (
@@ -271,9 +274,9 @@ export function SourceMonitor({
       </div>
 
       {/* Transport & Edit Buttons */}
-      <div className="flex items-center justify-between px-3 py-2 bg-cs-bg-surface border-t border-cs-border-subtle shrink-0">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-1.5 bg-cs-bg-surface border-t border-cs-border-subtle shrink-0">
         {/* Left: Timecode Readout */}
-        <div className="flex items-center gap-3 text-xs font-mono">
+        <div className="flex items-center gap-2 text-xs font-mono shrink-0">
           <span className="text-cs-text-primary font-semibold">{formatTimecode(currentTime, fps)}</span>
           <span className="text-cs-text-tertiary">/</span>
           <span className="text-cs-text-secondary">{formatTimecode(duration, fps)}</span>
@@ -285,7 +288,7 @@ export function SourceMonitor({
         </div>
 
         {/* Center: Play / Frame Stepping Controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 shrink-0">
           <IconButton label="Step 1 Sec Back" size="sm" onClick={() => handleStepFrames(-Math.round(fps))}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="11 19 2 12 11 5 11 19" />
@@ -325,18 +328,18 @@ export function SourceMonitor({
         </div>
 
         {/* Right: In/Out + Insert/Overwrite Actions */}
-        <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={handleMarkIn} title="Mark In (I)" className="px-2 text-xs font-mono">
+        <div className="flex items-center gap-1 shrink-0">
+          <Button variant="ghost" size="sm" onClick={handleMarkIn} title="Mark In (I)" className="px-1.5 text-[11px] font-mono h-6">
             [ In
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleMarkOut} title="Mark Out (O)" className="px-2 text-xs font-mono">
+          <Button variant="ghost" size="sm" onClick={handleMarkOut} title="Mark Out (O)" className="px-1.5 text-[11px] font-mono h-6">
             Out ]
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleClearInOut} title="Clear In/Out (Alt+X)" className="px-1.5 text-[11px] text-cs-text-tertiary">
+          <Button variant="ghost" size="sm" onClick={handleClearInOut} title="Clear In/Out (Alt+X)" className="px-1 text-[10px] text-cs-text-tertiary h-6">
             ✕
           </Button>
 
-          <div className="h-4 w-px bg-cs-border-subtle mx-1" />
+          <div className="h-4 w-px bg-cs-border-subtle mx-0.5" />
 
           {/* Insert Edit Button */}
           <Button
@@ -344,9 +347,9 @@ export function SourceMonitor({
             size="sm"
             onClick={handleDoInsert}
             title="Insert Edit (,) — Inserts at playhead, rippling downstream clips"
-            className="flex items-center gap-1 text-xs"
+            className="flex items-center gap-1 text-[11px] h-6 px-2"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <line x1="12" y1="5" x2="12" y2="19" />
               <polyline points="19 12 12 19 5 12" />
             </svg>
@@ -359,9 +362,9 @@ export function SourceMonitor({
             size="sm"
             onClick={handleDoOverwrite}
             title="Overwrite Edit (.) — Places onto timeline from playhead without rippling"
-            className="flex items-center gap-1 text-xs"
+            className="flex items-center gap-1 text-[11px] h-6 px-2"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <rect x="3" y="3" width="18" height="18" rx="2" />
               <line x1="3" y1="9" x2="21" y2="9" />
             </svg>

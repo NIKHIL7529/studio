@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * AppShell — the top-level application chrome.
  *

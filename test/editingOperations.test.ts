@@ -259,7 +259,7 @@ describe("Advanced NLE Timeline Editing Operations", () => {
 
   describe("Insert & Overwrite Edits", () => {
     test("insertEdit inserts clip and ripples downstream clips", () => {
-      const { timeline, videoTrackId, clip2Id, clip3Id } = createTestTimeline();
+      const { timeline, videoTrackId, clip3Id } = createTestTimeline();
 
       const newAsset = crypto.randomUUID();
       // Insert 3-second clip at 6s (splits clip 2 which spans 5 to 10)
@@ -332,7 +332,7 @@ describe("Advanced NLE Timeline Editing Operations", () => {
 
   describe("Track Management", () => {
     test("addTrack, removeTrack, reorderTrack and toggle functions", () => {
-      const { timeline, videoTrackId } = createTestTimeline();
+      const { timeline } = createTestTimeline();
 
       const withTrack = addTrack(timeline, "video", "Video 2");
       assert.equal(withTrack.tracks.length, 3);

@@ -28,7 +28,6 @@ import type {
 import type { LiveAssetItem } from "../../types/project.ts";
 import {
   moveClip,
-  removeClip,
   duplicateClip,
   splitClip,
   getTimelineDuration,
@@ -44,8 +43,6 @@ import {
   rippleDeleteClips,
   closeGap,
   addTrack,
-  removeTrack,
-  reorderTrack,
   toggleTrackLock,
   toggleTrackMute,
   toggleTrackSolo,
@@ -55,7 +52,6 @@ import {
   addMarker,
   removeMarker,
   findNearestMarker,
-  linkClips,
   unlinkClip,
   groupClips,
   ungroupClips,
@@ -69,7 +65,7 @@ import {
 } from "../../lib/timeline/interaction.ts";
 import { formatTimecode, stepFrames } from "../../lib/timeline/timecode.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
-import { IconButton, Button, Badge } from "@/components/ui";
+import { IconButton, Button } from "@/components/ui";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal.tsx";
 
 export type EditingTool = "select" | "razor" | "ripple" | "slip" | "slide";
@@ -84,8 +80,10 @@ export interface TimelineEditorProps {
   onPlayPause: () => void;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  selectedTrackId?: string | null;
   onSelectClip: (clipId: string | null) => void;
   onSelectOverlay: (overlayId: string | null) => void;
+  onSelectTrack?: (trackId: string | null) => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -496,36 +494,79 @@ function ClipBlock({
   );
 }
 
-// ─── Text Overlay Block ───────────────────────────────────────────────────────
+// ─── Text Overlay Block & Lane Allocation ───────────────────────────────────
+
+function computeOverlayLanes(overlays: TextOverlay[]): { lanes: Map<string, number>; totalLanes: number } {
+  const lanes = new Map<string, number>();
+  const laneEndTimes: number[] = [];
+
+  const sorted = [...overlays].sort((a, b) => a.startTime - b.startTime);
+  for (const o of sorted) {
+    let placed = false;
+    for (let l = 0; l < laneEndTimes.length; l++) {
+      if (laneEndTimes[l] <= o.startTime + 0.05) {
+        lanes.set(o.id, l);
+        laneEndTimes[l] = o.endTime;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      lanes.set(o.id, laneEndTimes.length);
+      laneEndTimes.push(o.endTime);
+    }
+  }
+  return { lanes, totalLanes: Math.max(1, laneEndTimes.length) };
+}
 
 function OverlayBlock({
   overlay,
   pxPerSec,
   isSelected,
+  laneIndex = 0,
+  totalLanes = 1,
   onSelect,
 }: {
   overlay: TextOverlay;
   pxPerSec: number;
   isSelected: boolean;
+  laneIndex?: number;
+  totalLanes?: number;
   onSelect: () => void;
 }) {
   const left = overlay.startTime * pxPerSec;
-  const width = Math.max(2, (overlay.endTime - overlay.startTime) * pxPerSec);
+  const width = Math.max(4, (overlay.endTime - overlay.startTime) * pxPerSec);
+
+  const availableHeight = OVERLAY_TRACK_HEIGHT - 6;
+  const laneHeight = Math.max(16, availableHeight / totalLanes);
+  const top = 3 + laneIndex * laneHeight;
+  const height = Math.max(14, laneHeight - 2);
+
+  const isNarrow = width < 45;
+  const isCaption = overlay.overlayType === "caption";
 
   return (
     <div
-      className={`absolute top-1 rounded border border-cs-warning/60 bg-cs-warning/20 text-[10px] font-medium overflow-hidden cursor-pointer select-none ${
-        isSelected ? "ring-2 ring-cs-warning" : ""
-      }`}
-      style={{ left, width, height: OVERLAY_TRACK_HEIGHT - 8 }}
+      className={`absolute rounded border text-[10px] font-medium overflow-hidden cursor-pointer select-none box-border transition-shadow ${
+        isCaption
+          ? "border-amber-500/60 bg-amber-500/20 text-amber-300"
+          : "border-sky-500/60 bg-sky-500/20 text-sky-300"
+      } ${isSelected ? "ring-2 ring-white shadow-md z-10" : "hover:border-white/50"}`}
+      style={{ left, width, top, height }}
       onClick={(e) => {
         e.stopPropagation();
         onSelect();
       }}
-      title={overlay.text}
+      title={`${overlay.text || "(empty caption)"} [${overlay.startTime.toFixed(2)}s – ${overlay.endTime.toFixed(2)}s]`}
     >
-      <div className="px-1.5 py-0.5 truncate leading-tight text-cs-warning">
-        {overlay.text || "(empty title/caption)"}
+      <div className="px-1.5 py-0.2 truncate leading-tight flex items-center h-full">
+        {isNarrow ? (
+          <span className="font-mono text-[9px] font-bold mx-auto">
+            {isCaption ? "CC" : "T"}
+          </span>
+        ) : (
+          <span className="truncate">{overlay.text || "(empty)"}</span>
+        )}
       </div>
     </div>
   );
@@ -563,8 +604,10 @@ export function TimelineEditor({
   onPlayPause,
   selectedClipId,
   selectedOverlayId,
+  selectedTrackId,
   onSelectClip,
   onSelectOverlay,
+  onSelectTrack,
   canUndo,
   canRedo,
   onUndo,
@@ -575,6 +618,12 @@ export function TimelineEditor({
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>(
     selectedClipId ? [selectedClipId] : []
   );
+  const [prevSelectedClipId, setPrevSelectedClipId] = useState(selectedClipId);
+  if (selectedClipId !== prevSelectedClipId) {
+    setPrevSelectedClipId(selectedClipId);
+    setSelectedClipIds(selectedClipId ? [selectedClipId] : []);
+  }
+
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [clipboardClips, setClipboardClips] = useState<TimelineClip[]>([]);
 
@@ -585,16 +634,13 @@ export function TimelineEditor({
   const fps = timeline.timebase?.fps || 30;
   const totalDuration = getTimelineDuration(timeline);
   const timelineWidth = Math.max(totalDuration * pxPerSec + 300, viewWidth);
-  const totalHeight = timeline.tracks.length * TRACK_HEIGHT + OVERLAY_TRACK_HEIGHT;
 
-  // Keep single selected clip synchronized with multi-select state
-  useEffect(() => {
-    if (selectedClipId && !selectedClipIds.includes(selectedClipId)) {
-      setSelectedClipIds([selectedClipId]);
-    } else if (!selectedClipId && selectedClipIds.length > 0) {
-      setSelectedClipIds([]);
-    }
-  }, [selectedClipId]);
+  const { lanes: overlayLanes, totalLanes: overlayTotalLanes } = useMemo(
+    () => computeOverlayLanes(timeline.textOverlays),
+    [timeline.textOverlays]
+  );
+  const overlayTrackHeight = Math.max(OVERLAY_TRACK_HEIGHT, overlayTotalLanes * 22 + 8);
+  const totalHeight = timeline.tracks.length * TRACK_HEIGHT + overlayTrackHeight;
 
   // Sync scroll
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
@@ -1213,14 +1259,20 @@ export function TimelineEditor({
               key={track.id}
               track={track}
               timeline={timeline}
+              isSelected={selectedTrackId === track.id}
+              onSelect={() => {
+                onSelectClip(null);
+                onSelectOverlay(null);
+                onSelectTrack?.(track.id);
+              }}
               onTimelineChange={onTimelineChange}
             />
           ))}
 
           {/* Text Overlay Track Header */}
           <div
-            className="shrink-0 flex items-center gap-2 px-2 border-b border-cs-border-subtle bg-cs-bg-surface"
-            style={{ height: OVERLAY_TRACK_HEIGHT }}
+            className="shrink-0 flex items-center gap-2 px-2 border-b border-cs-border-subtle bg-cs-bg-surface select-none"
+            style={{ height: overlayTrackHeight }}
           >
             <div className="text-cs-warning opacity-70">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
@@ -1273,7 +1325,6 @@ export function TimelineEditor({
                 <TrackLane
                   key={track.id}
                   track={track}
-                  timeline={timeline}
                   pxPerSec={pxPerSec}
                   liveAssets={liveAssets}
                   selectedClipId={selectedClipId}
@@ -1282,6 +1333,7 @@ export function TimelineEditor({
                   onLaneClick={() => {
                     onSelectClip(null);
                     onSelectOverlay(null);
+                    onSelectTrack?.(null);
                     setSelectedClipIds([]);
                   }}
                   onClipDragStart={handleClipDragStart}
@@ -1297,10 +1349,11 @@ export function TimelineEditor({
               {/* Overlay Lane */}
               <div
                 className="absolute left-0 right-0 border-b border-cs-border-subtle bg-cs-bg-base/20"
-                style={{ top: sortedTracks.length * TRACK_HEIGHT, height: OVERLAY_TRACK_HEIGHT }}
+                style={{ top: sortedTracks.length * TRACK_HEIGHT, height: overlayTrackHeight }}
                 onClick={() => {
                   onSelectClip(null);
                   onSelectOverlay(null);
+                  onSelectTrack?.(null);
                 }}
               >
                 {timeline.textOverlays.map((overlay) => (
@@ -1309,9 +1362,12 @@ export function TimelineEditor({
                     overlay={overlay}
                     pxPerSec={pxPerSec}
                     isSelected={selectedOverlayId === overlay.id}
+                    laneIndex={overlayLanes.get(overlay.id) ?? 0}
+                    totalLanes={overlayTotalLanes}
                     onSelect={() => {
                       onSelectClip(null);
                       onSelectOverlay(overlay.id);
+                      onSelectTrack?.(null);
                     }}
                   />
                 ))}
@@ -1335,10 +1391,14 @@ export function TimelineEditor({
 function TrackHeader({
   track,
   timeline,
+  isSelected,
+  onSelect,
   onTimelineChange,
 }: {
   track: TimelineTrack;
   timeline: TimelineDocument;
+  isSelected?: boolean;
+  onSelect?: () => void;
   onTimelineChange: (t: TimelineDocument) => void;
 }) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -1353,7 +1413,12 @@ function TrackHeader({
 
   return (
     <div
-      className="shrink-0 flex items-center justify-between px-2 border-b border-cs-border-subtle bg-cs-bg-surface text-xs"
+      onClick={onSelect}
+      className={`shrink-0 flex items-center justify-between px-2 border-b border-cs-border-subtle text-xs cursor-pointer select-none transition-colors ${
+        isSelected
+          ? "bg-cs-bg-elevated border-l-2 border-l-cs-accent"
+          : "bg-cs-bg-surface hover:bg-cs-bg-base"
+      }`}
       style={{ height: TRACK_HEIGHT }}
     >
       <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -1456,7 +1521,6 @@ function TrackHeader({
 
 function TrackLane({
   track,
-  timeline,
   pxPerSec,
   liveAssets,
   selectedClipId,
@@ -1472,7 +1536,6 @@ function TrackLane({
   style,
 }: {
   track: TimelineTrack;
-  timeline: TimelineDocument;
   pxPerSec: number;
   liveAssets: Map<string, LiveAssetItem>;
   selectedClipId: string | null;
@@ -1529,7 +1592,7 @@ function TrackLane({
             trackType={track.type}
             isTrackLocked={track.locked}
             activeTool={activeTool}
-            onSelect={(e) => {
+            onSelect={() => {
               onSelectClip(clip.id);
             }}
             onDragStart={onClipDragStart}

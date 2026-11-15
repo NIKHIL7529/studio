@@ -424,8 +424,11 @@ export function getActiveClipAtTime(
   timeline: TimelineDocument,
   time: number,
 ): TimelineClip | null {
-  for (const track of timeline.tracks) {
-    if (track.type !== "video") continue;
+  const visibleVideoTracks = [...timeline.tracks]
+    .filter((t) => t.type === "video" && !t.hidden)
+    .sort((a, b) => a.order - b.order);
+
+  for (const track of visibleVideoTracks) {
     for (const clip of track.clips) {
       const duration = clip.sourceOut - clip.sourceIn;
       const endTime = clip.startTime + duration;

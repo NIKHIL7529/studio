@@ -172,22 +172,28 @@ export function checkLiteralKeywords(
  */
 export function calculateDurationFit(
   duration: number,
-  minClipDuration: number,
-  maxClipDuration: number,
-  _objective: RepurposeObjective
+  minClipDuration?: number,
+  maxClipDuration?: number,
+  _objective?: RepurposeObjective
 ): number {
   void _objective;
-  // Coherent moments between 3s and 60s are valid
-  if (duration >= minClipDuration && duration <= maxClipDuration) {
+  // If neither limit is specified, natural content-derived durations are optimal
+  if (!minClipDuration && !maxClipDuration) {
+    return 95;
+  }
+  const min = minClipDuration || 2.0;
+  const max = maxClipDuration || 180.0;
+
+  if (duration >= min && duration <= max) {
     return 95;
   }
   // Soft boundary deviation curve
-  if (duration < minClipDuration) {
-    const diff = minClipDuration - duration;
+  if (duration < min) {
+    const diff = min - duration;
     return Math.max(30, 95 - diff * 8);
   }
-  const diff = duration - maxClipDuration;
-  return Math.max(30, 95 - diff * 4);
+  const diff = duration - max;
+  return Math.max(30, 95 - diff * 3);
 }
 
 /**

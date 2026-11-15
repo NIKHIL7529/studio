@@ -75,9 +75,11 @@ export function RepurposeWorkflow({
   const [targetDurationMode, setTargetDurationMode] = useState<"auto" | "30" | "60" | "90" | "custom">("auto");
   const [customTargetDuration, setCustomTargetDuration] = useState<number>(45);
 
-  const [targetClipCount, setTargetClipCount] = useState(3);
-  const [minClipDuration, setMinClipDuration] = useState(5);
-  const [maxClipDuration, setMaxClipDuration] = useState(60);
+  // Non-binding optional editorial preferences (unset by default)
+  const [optionalClipCount, setOptionalClipCount] = useState<number | undefined>(undefined);
+  const [optionalMinDur, setOptionalMinDur] = useState<number | undefined>(undefined);
+  const [optionalMaxDur, setOptionalMaxDur] = useState<number | undefined>(undefined);
+  const [showAdvancedDurationPrefs, setShowAdvancedDurationPrefs] = useState(false);
   const [targetAspectRatio, setTargetAspectRatio] = useState<ExportAspectRatio>("9:16");
   const [keywordsText, setKeywordsText] = useState("");
 
@@ -168,10 +170,6 @@ export function RepurposeWorkflow({
       setAnalysisError("Please select at least one source video to analyze.");
       return;
     }
-    if (minClipDuration <= 0 || maxClipDuration <= minClipDuration) {
-      setAnalysisError("Minimum clip duration must be greater than 0 and less than maximum duration.");
-      return;
-    }
 
     const keywords = keywordsText
       .split(",")
@@ -194,9 +192,9 @@ export function RepurposeWorkflow({
       userBrief: userBrief.trim() || undefined,
       deliverableType,
       targetDuration: targetDur,
-      targetClipCount,
-      minClipDuration,
-      maxClipDuration,
+      targetClipCount: optionalClipCount,
+      minClipDuration: optionalMinDur,
+      maxClipDuration: optionalMaxDur,
       targetAspectRatio,
       keywords,
       selectedAssetIds,
@@ -639,7 +637,7 @@ export function RepurposeWorkflow({
           </div>
         ) : (
           /* Configuration Setup State */
-          <div className="max-w-4xl mx-auto flex flex-col gap-6">
+          <div className="max-w-6xl w-full mx-auto flex flex-col gap-6">
             {analysisError && (
               <div className="p-4 rounded-lg bg-cs-error/10 border border-cs-error/20 text-xs text-cs-error flex items-center justify-between">
                 <span>{analysisError}</span>
@@ -949,66 +947,110 @@ export function RepurposeWorkflow({
               </div>
             </Panel>
 
-            {/* 4. Formatting & Export Bounds */}
+            {/* 4. Target Format & Duration Guidance */}
             <Panel>
-              <PanelHeader title="4. Formatting & Guidelines" />
-              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                {/* Desired Clip Count */}
-                <div>
-                  <label className="text-cs-text-tertiary block mb-1 font-medium">Desired Clip Count</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={12}
-                    value={targetClipCount}
-                    onChange={(e) => setTargetClipCount(Math.max(1, Math.min(12, parseInt(e.target.value) || 1)))}
-                    className="w-full px-3 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
-                  />
-                  <span className="text-[10px] text-cs-text-tertiary mt-1 block">Soft guidance count</span>
+              <PanelHeader title="4. Target Format & Guidance" />
+              <div className="p-4 flex flex-col gap-4 text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Target Aspect Ratio */}
+                  <div>
+                    <label className="text-cs-text-secondary block mb-1 font-medium">Target Aspect Ratio</label>
+                    <select
+                      value={targetAspectRatio}
+                      onChange={(e) => setTargetAspectRatio(e.target.value as ExportAspectRatio)}
+                      className="w-full px-3 py-2 rounded-lg bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
+                    >
+                      <option value="9:16">9:16 (Shorts / Reels / TikTok)</option>
+                      <option value="16:9">16:9 (Landscape / YouTube)</option>
+                      <option value="1:1">1:1 (Square / Feed)</option>
+                      <option value="4:5">4:5 (Social Portrait)</option>
+                    </select>
+                    <span className="text-[10px] text-cs-text-tertiary mt-1 block">
+                      Sequence framing and caption safe margins conform to this orientation.
+                    </span>
+                  </div>
+
+                  {/* Content-Driven Duration Notice */}
+                  <div className="p-3 bg-cs-bg-base/60 rounded-lg border border-cs-border-subtle flex flex-col justify-center">
+                    <span className="font-semibold text-cs-text-primary text-[11px] mb-0.5">Content-Driven Durations</span>
+                    <p className="text-[11px] text-cs-text-secondary leading-relaxed">
+                      Excerpt lengths emerge naturally from speech boundaries, complete thoughts, and visual dynamics.
+                      No fixed clip count or artificial duration clamps are imposed.
+                    </p>
+                  </div>
                 </div>
 
-                {/* Min Clip Duration */}
-                <div>
-                  <label className="text-cs-text-tertiary block mb-1 font-medium">Min Duration (seconds)</label>
-                  <input
-                    type="number"
-                    min={3}
-                    max={60}
-                    value={minClipDuration}
-                    onChange={(e) => setMinClipDuration(Math.max(1, parseInt(e.target.value) || 3))}
-                    className="w-full px-3 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
-                  />
-                  <span className="text-[10px] text-cs-text-tertiary mt-1 block">Soft lower threshold</span>
-                </div>
-
-                {/* Max Clip Duration */}
-                <div>
-                  <label className="text-cs-text-tertiary block mb-1 font-medium">Max Duration (seconds)</label>
-                  <input
-                    type="number"
-                    min={10}
-                    max={180}
-                    value={maxClipDuration}
-                    onChange={(e) => setMaxClipDuration(Math.max(minClipDuration + 1, parseInt(e.target.value) || 30))}
-                    className="w-full px-3 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
-                  />
-                  <span className="text-[10px] text-cs-text-tertiary mt-1 block">Soft upper threshold</span>
-                </div>
-
-                {/* Target Aspect Ratio */}
-                <div>
-                  <label className="text-cs-text-tertiary block mb-1 font-medium">Target Aspect Ratio</label>
-                  <select
-                    value={targetAspectRatio}
-                    onChange={(e) => setTargetAspectRatio(e.target.value as ExportAspectRatio)}
-                    className="w-full px-3 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
+                {/* Advanced Optional Preferences (Non-binding) Accordion */}
+                <div className="pt-2 border-t border-cs-border-subtle">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedDurationPrefs(!showAdvancedDurationPrefs)}
+                    className="flex items-center gap-2 text-xs font-medium text-cs-text-secondary hover:text-cs-text-primary transition-colors"
                   >
-                    <option value="9:16">9:16 (Shorts / Reels / TikTok)</option>
-                    <option value="16:9">16:9 (Landscape / YouTube)</option>
-                    <option value="1:1">1:1 (Square / Feed)</option>
-                    <option value="4:5">4:5 (Social Portrait)</option>
-                  </select>
-                  <span className="text-[10px] text-cs-text-tertiary mt-1 block">Supported by renderer</span>
+                    <span>{showAdvancedDurationPrefs ? "▼" : "▶"}</span>
+                    <span>Optional Editorial Preferences (Non-binding)</span>
+                  </button>
+
+                  {showAdvancedDurationPrefs && (
+                    <div className="mt-3 p-3 bg-cs-bg-base/40 rounded-lg border border-cs-border-subtle grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-cs-text-tertiary block mb-1 font-medium">Preferred Clip Count (Optional)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          placeholder="Content-driven"
+                          value={optionalClipCount ?? ""}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseInt(e.target.value) : undefined;
+                            setOptionalClipCount(val && val > 0 ? val : undefined);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary text-xs"
+                        />
+                        <span className="text-[10px] text-cs-text-tertiary mt-1 block">
+                          Non-binding guide. High-value moments take precedence.
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="text-cs-text-tertiary block mb-1 font-medium">Soft Min Duration (sec, Optional)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          placeholder="Auto (speech pause)"
+                          value={optionalMinDur ?? ""}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseFloat(e.target.value) : undefined;
+                            setOptionalMinDur(val && val > 0 ? val : undefined);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary text-xs"
+                        />
+                        <span className="text-[10px] text-cs-text-tertiary mt-1 block">
+                          Soft guide. Thoughts will not be cut mid-sentence.
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="text-cs-text-tertiary block mb-1 font-medium">Soft Max Duration (sec, Optional)</label>
+                        <input
+                          type="number"
+                          min={10}
+                          max={300}
+                          placeholder="Auto (complete thought)"
+                          value={optionalMaxDur ?? ""}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseFloat(e.target.value) : undefined;
+                            setOptionalMaxDur(val && val > 0 ? val : undefined);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary text-xs"
+                        />
+                        <span className="text-[10px] text-cs-text-tertiary mt-1 block">
+                          Soft guide. Key explanations are not discarded solely for length.
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </Panel>
