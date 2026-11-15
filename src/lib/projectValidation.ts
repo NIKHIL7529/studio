@@ -9,7 +9,7 @@
  */
 
 import type { ProjectDocument, ProjectAsset, MediaCategory, ProjectExport, ExportOutputSettings } from "../types/project.ts";
-import type { TimelineDocument, TimelineTrack, TimelineClip, TextOverlay } from "../types/timeline.ts";
+import type { TimelineDocument, TimelineTrack, TimelineClip, TextOverlay, TimelineMarker, TrackType, SequenceDocument } from "../types/timeline.ts";
 import type { InspectedMediaMetadata, InspectedVideoTrack, InspectedAudioTrack } from "./media/types.ts";
 import { validateTimeline } from "./timeline/model.ts";
 
@@ -220,8 +220,9 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
     if (!isValidUuid(tr.id)) {
       return { ok: false, error: `Invalid track UUID at index ${i}: ${String(tr.id)}` };
     }
-    if (tr.type !== "video" && tr.type !== "audio") {
-      return { ok: false, error: `Invalid track type "${String(tr.type)}" at index ${i}. Must be "video" or "audio".` };
+    const validTrackTypes = ["video", "audio", "title", "caption"];
+    if (typeof tr.type !== "string" || !validTrackTypes.includes(tr.type)) {
+      return { ok: false, error: `Invalid track type "${String(tr.type)}" at index ${i}. Must be one of: ${validTrackTypes.join(", ")}.` };
     }
     if (typeof tr.name !== "string" || tr.name.trim().length === 0) {
       return { ok: false, error: `Track at index ${i} must have a non-empty name.` };
@@ -251,7 +252,7 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
       const volume = typeof cl.volume === "number" && Number.isFinite(cl.volume) ? Math.max(0, Math.min(1, cl.volume)) : 1;
       const muted = typeof cl.muted === "boolean" ? cl.muted : false;
 
-      clips.push({
+      const clipItem: TimelineClip = {
         id: (cl.id as string).trim(),
         assetId: (cl.assetId as string).trim(),
         trackId: (cl.trackId as string).trim(),
@@ -260,17 +261,38 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
         sourceOut,
         volume,
         muted,
-      });
+      };
+
+      if (typeof cl.groupId === "string" && cl.groupId.trim().length > 0) {
+        clipItem.groupId = cl.groupId.trim();
+      }
+      if (typeof cl.linkedClipId === "string" && cl.linkedClipId.trim().length > 0) {
+        clipItem.linkedClipId = cl.linkedClipId.trim();
+      }
+      if (typeof cl.speed === "number" && Number.isFinite(cl.speed) && cl.speed > 0) {
+        clipItem.speed = cl.speed;
+      }
+
+      clips.push(clipItem);
     }
 
-    tracks.push({
+    const trackItem: TimelineTrack = {
       id: (tr.id as string).trim(),
-      type: tr.type as "video" | "audio",
+      type: tr.type as TrackType,
       name: (tr.name as string).trim(),
       order: typeof tr.order === "number" && Number.isFinite(tr.order) ? tr.order : i,
       muted: typeof tr.muted === "boolean" ? tr.muted : false,
       clips,
-    });
+    };
+
+    if (typeof tr.locked === "boolean") trackItem.locked = tr.locked;
+    if (typeof tr.hidden === "boolean") trackItem.hidden = tr.hidden;
+    if (typeof tr.solo === "boolean") trackItem.solo = tr.solo;
+    if (typeof tr.syncLocked === "boolean") trackItem.syncLocked = tr.syncLocked;
+    if (typeof tr.volume === "number" && Number.isFinite(tr.volume)) trackItem.volume = tr.volume;
+    if (tr.height === "compact" || tr.height === "normal" || tr.height === "expanded") trackItem.height = tr.height;
+
+    tracks.push(trackItem);
   }
 
   const textOverlays: TextOverlay[] = [];
@@ -315,12 +337,41 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
     }
   }
 
+  const markers: TimelineMarker[] = [];
+  if (Array.isArray(obj.markers)) {
+    for (const m of obj.markers) {
+      if (typeof m === "object" && m !== null) {
+        const mrk = m as Record<string, unknown>;
+        if (typeof mrk.time === "number" && Number.isFinite(mrk.time) && mrk.time >= 0) {
+          markers.push({
+            id: typeof mrk.id === "string" && mrk.id.trim() ? mrk.id.trim() : crypto.randomUUID(),
+            time: mrk.time,
+            label: typeof mrk.label === "string" ? mrk.label.trim() : "Marker",
+            color: typeof mrk.color === "string" ? mrk.color.trim() : "#3b82f6",
+            notes: typeof mrk.notes === "string" ? mrk.notes : undefined,
+            duration: typeof mrk.duration === "number" && Number.isFinite(mrk.duration) ? mrk.duration : undefined,
+          });
+        }
+      }
+    }
+  }
+
   const timelineDoc: TimelineDocument = {
     id: (obj.id as string).trim(),
     tracks,
     textOverlays,
     settings,
   };
+
+  if (markers.length > 0) timelineDoc.markers = markers;
+  if (typeof obj.inPoint === "number" && Number.isFinite(obj.inPoint)) timelineDoc.inPoint = obj.inPoint;
+  if (typeof obj.outPoint === "number" && Number.isFinite(obj.outPoint)) timelineDoc.outPoint = obj.outPoint;
+  if (typeof obj.timebase === "object" && obj.timebase !== null) {
+    const tb = obj.timebase as Record<string, unknown>;
+    if (typeof tb.fps === "number" && Number.isFinite(tb.fps) && tb.fps > 0) {
+      timelineDoc.timebase = { fps: tb.fps };
+    }
+  }
 
   const modelErrors = validateTimeline(timelineDoc);
   if (modelErrors.length > 0) {
@@ -416,6 +467,32 @@ export function validateProjectDocument(
     }
   }
 
+  let sequencesList: SequenceDocument[] | undefined = undefined;
+  if (Array.isArray(obj.sequences)) {
+    sequencesList = [];
+    for (let i = 0; i < obj.sequences.length; i++) {
+      const s = obj.sequences[i];
+      if (typeof s !== "object" || s === null) continue;
+      const seq = s as Record<string, unknown>;
+      if (!isValidUuid(seq.id) || typeof seq.name !== "string" || !seq.name.trim()) continue;
+
+      const tRes = validateTimelineDocument(seq.timeline);
+      if (!tRes.ok) continue;
+
+      sequencesList.push({
+        id: (seq.id as string).trim(),
+        name: (seq.name as string).trim(),
+        fps: typeof seq.fps === "number" && seq.fps > 0 ? seq.fps : 30,
+        width: typeof seq.width === "number" && seq.width > 0 ? Math.floor(seq.width) : 1920,
+        height: typeof seq.height === "number" && seq.height > 0 ? Math.floor(seq.height) : 1080,
+        aspectRatio: (seq.aspectRatio as "16:9" | "9:16" | "1:1" | "4:5") || "16:9",
+        timeline: tRes.data,
+        createdAt: isValidIsoDate(seq.createdAt) ? (seq.createdAt as string) : new Date().toISOString(),
+        updatedAt: isValidIsoDate(seq.updatedAt) ? (seq.updatedAt as string) : new Date().toISOString(),
+      });
+    }
+  }
+
   const docData: ProjectDocument = {
     schemaVersion: 1,
     id: (obj.id as string).trim(),
@@ -430,6 +507,12 @@ export function validateProjectDocument(
   }
   if (timeline !== undefined) {
     docData.timeline = timeline;
+  }
+  if (sequencesList !== undefined && sequencesList.length > 0) {
+    docData.sequences = sequencesList;
+  }
+  if (typeof obj.activeSequenceId === "string" && isValidUuid(obj.activeSequenceId)) {
+    docData.activeSequenceId = obj.activeSequenceId.trim();
   }
   if (exportsList !== undefined) {
     docData.exports = exportsList;

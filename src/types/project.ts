@@ -9,7 +9,7 @@
  */
 
 import type { InspectedMediaMetadata, MediaInspectionResult } from "../lib/media/types.ts";
-import type { TimelineDocument } from "./timeline.ts";
+import type { TimelineDocument, SequenceDocument } from "./timeline.ts";
 
 export interface ProjectSettings {
   /** Output aspect ratio preference (e.g. "16:9", "9:16", "1:1", "4:5") */
@@ -113,9 +113,19 @@ export interface ProjectDocument {
   settings?: ProjectSettings;
 
   /**
-   * Optional timeline document embedded in the project.
+   * Optional timeline document embedded in the project (primary sequence).
    */
   timeline?: TimelineDocument;
+
+  /**
+   * Optional multi-sequence collection.
+   */
+  sequences?: SequenceDocument[];
+
+  /**
+   * Active sequence UUID if sequences are defined.
+   */
+  activeSequenceId?: string;
 
   /**
    * Optional registered exports for this project.

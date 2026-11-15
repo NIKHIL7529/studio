@@ -35,6 +35,19 @@ import { MediaInspectionQueue } from "../lib/media/inspectionQueue.ts";
 import { formatDuration } from "../lib/media/inspector.ts";
 import { createTimeline, addTextOverlay, getTimelineDuration } from "../lib/timeline/model.ts";
 import { TimelineUndoStack } from "../lib/timeline/undoRedo.ts";
+import { SourceMonitor } from "./editor/SourceMonitor.tsx";
+import { SequenceSelector } from "./editor/SequenceSelector.tsx";
+import {
+  ensureSequencesInitialized,
+  getActiveSequence,
+  setActiveSequence,
+  addSequenceToProject,
+  duplicateSequence,
+  renameSequence,
+  deleteSequence,
+  updateActiveSequenceTimeline,
+} from "../lib/timeline/sequenceManager.ts";
+import { insertEdit, overwriteEdit } from "../lib/timeline/editingOperations.ts";
 import { MediaPreviewPlayer } from "./MediaPreviewPlayer.tsx";
 import { TimelineEditor } from "./editor/TimelineEditor.tsx";
 import { TimelinePreview } from "./editor/TimelinePreview.tsx";
@@ -72,7 +85,9 @@ export function ProjectWorkspace({
   onCloseProject,
   onProjectUpdated,
 }: ProjectWorkspaceProps) {
-  const [doc, setDoc] = useState<ProjectDocumentWithTimeline>(project as ProjectDocumentWithTimeline);
+  const [doc, setDoc] = useState<ProjectDocumentWithTimeline>(() =>
+    ensureSequencesInitialized(project as ProjectDocumentWithTimeline) as ProjectDocumentWithTimeline
+  );
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [isRenaming, setIsRenaming] = useState(false);
@@ -81,8 +96,11 @@ export function ProjectWorkspace({
   // Editor mode
   const [editorMode, setEditorMode] = useState<EditorMode>("editor");
 
-  // Selected asset for library preview
+  // Selected asset for library preview and source monitor
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(
+    project.assets[0]?.id || null
+  );
+  const [sourceAssetId, setSourceAssetId] = useState<string | null>(
     project.assets[0]?.id || null
   );
 
@@ -179,9 +197,10 @@ export function ProjectWorkspace({
     setCanUndo(undoStack.canUndo());
     setCanRedo(undoStack.canRedo());
 
-    // Autosave timeline with project
+    // Autosave timeline with project and sync active sequence
     const currentDoc = docRef.current;
-    updateProject({ ...currentDoc, timeline: newTimeline } as ProjectDocumentWithTimeline);
+    const withSeq = updateActiveSequenceTimeline(currentDoc, newTimeline);
+    updateProject(withSeq as ProjectDocumentWithTimeline);
   }, [undoStack, updateProject]);
 
   const handleUndo = useCallback(() => {
@@ -191,7 +210,8 @@ export function ProjectWorkspace({
       setCanUndo(undoStack.canUndo());
       setCanRedo(undoStack.canRedo());
       const currentDoc = docRef.current;
-      updateProject({ ...currentDoc, timeline: prev } as ProjectDocumentWithTimeline);
+      const withSeq = updateActiveSequenceTimeline(currentDoc, prev);
+      updateProject(withSeq as ProjectDocumentWithTimeline);
     }
   }, [undoStack, updateProject]);
 
@@ -202,9 +222,100 @@ export function ProjectWorkspace({
       setCanUndo(undoStack.canUndo());
       setCanRedo(undoStack.canRedo());
       const currentDoc = docRef.current;
-      updateProject({ ...currentDoc, timeline: next } as ProjectDocumentWithTimeline);
+      const withSeq = updateActiveSequenceTimeline(currentDoc, next);
+      updateProject(withSeq as ProjectDocumentWithTimeline);
     }
   }, [undoStack, updateProject]);
+
+  // ─── Sequence Management ─────────────────────────────────────────────────
+
+  const handleSelectSequence = useCallback(
+    (seqId: string) => {
+      const updated = setActiveSequence(docRef.current, seqId);
+      updateProject(updated as ProjectDocumentWithTimeline);
+      const active = getActiveSequence(updated);
+      setTimeline(active.timeline);
+      undoStack.clear();
+      undoStack.push(active.timeline);
+      setCanUndo(false);
+      setCanRedo(false);
+      setCurrentTime(0);
+    },
+    [undoStack, updateProject]
+  );
+
+  const handleCreateSequence = useCallback(
+    (name: string, aspectRatio: "16:9" | "9:16" | "1:1" | "4:5", fps: number) => {
+      const updated = addSequenceToProject(docRef.current, { name, aspectRatio, fps });
+      updateProject(updated as ProjectDocumentWithTimeline);
+      const active = getActiveSequence(updated);
+      setTimeline(active.timeline);
+      undoStack.clear();
+      undoStack.push(active.timeline);
+      setCanUndo(false);
+      setCanRedo(false);
+      setCurrentTime(0);
+    },
+    [undoStack, updateProject]
+  );
+
+  const handleDuplicateSequence = useCallback(
+    (seqId: string) => {
+      const updated = duplicateSequence(docRef.current, seqId);
+      updateProject(updated as ProjectDocumentWithTimeline);
+      const active = getActiveSequence(updated);
+      setTimeline(active.timeline);
+      undoStack.clear();
+      undoStack.push(active.timeline);
+      setCanUndo(false);
+      setCanRedo(false);
+    },
+    [undoStack, updateProject]
+  );
+
+  const handleRenameSequence = useCallback(
+    (seqId: string, newName: string) => {
+      const updated = renameSequence(docRef.current, seqId, newName);
+      updateProject(updated as ProjectDocumentWithTimeline);
+    },
+    [updateProject]
+  );
+
+  const handleDeleteSequence = useCallback(
+    (seqId: string) => {
+      try {
+        const updated = deleteSequence(docRef.current, seqId);
+        updateProject(updated as ProjectDocumentWithTimeline);
+        const active = getActiveSequence(updated);
+        setTimeline(active.timeline);
+        undoStack.clear();
+        undoStack.push(active.timeline);
+        setCanUndo(false);
+        setCanRedo(false);
+      } catch (err: unknown) {
+        console.warn("Failed to delete sequence:", err);
+      }
+    },
+    [undoStack, updateProject]
+  );
+
+  // ─── Insert & Overwrite Edits ─────────────────────────────────────────────
+
+  const handleInsertEdit = useCallback(
+    (assetId: string, sIn: number, sOut: number, targetTrackId: string) => {
+      const updated = insertEdit(timelineRef.current, targetTrackId, assetId, sIn, sOut, currentTime, true);
+      handleTimelineChange(updated);
+    },
+    [currentTime, handleTimelineChange]
+  );
+
+  const handleOverwriteEdit = useCallback(
+    (assetId: string, sIn: number, sOut: number, targetTrackId: string) => {
+      const updated = overwriteEdit(timelineRef.current, targetTrackId, assetId, sIn, sOut, currentTime);
+      handleTimelineChange(updated);
+    },
+    [currentTime, handleTimelineChange]
+  );
 
   const handleSeek = useCallback((time: number) => {
     setCurrentTime(Math.max(0, time));
@@ -732,6 +843,7 @@ export function ProjectWorkspace({
           isPlaying={isPlaying}
           selectedClipId={selectedClipId}
           selectedOverlayId={selectedOverlayId}
+          sourceAssetId={sourceAssetId}
           canUndo={canUndo}
           canRedo={canRedo}
           isImporting={isImporting}
@@ -746,6 +858,14 @@ export function ProjectWorkspace({
           onPlaybackTimeUpdate={handlePlaybackTimeUpdate}
           onSelectClip={setSelectedClipId}
           onSelectOverlay={setSelectedOverlayId}
+          onSelectSourceAsset={setSourceAssetId}
+          onInsertEdit={handleInsertEdit}
+          onOverwriteEdit={handleOverwriteEdit}
+          onSelectSequence={handleSelectSequence}
+          onCreateSequence={handleCreateSequence}
+          onDuplicateSequence={handleDuplicateSequence}
+          onRenameSequence={handleRenameSequence}
+          onDeleteSequence={handleDeleteSequence}
           onUndo={handleUndo}
           onRedo={handleRedo}
           onAddTextOverlay={handleAddTextOverlay}
@@ -989,6 +1109,7 @@ function EditorMode({
   isPlaying,
   selectedClipId,
   selectedOverlayId,
+  sourceAssetId,
   canUndo,
   canRedo,
   isImporting,
@@ -1003,6 +1124,14 @@ function EditorMode({
   onPlaybackTimeUpdate,
   onSelectClip,
   onSelectOverlay,
+  onSelectSourceAsset,
+  onInsertEdit,
+  onOverwriteEdit,
+  onSelectSequence,
+  onCreateSequence,
+  onDuplicateSequence,
+  onRenameSequence,
+  onDeleteSequence,
   onUndo,
   onRedo,
   onAddTextOverlay,
@@ -1014,6 +1143,7 @@ function EditorMode({
   isPlaying: boolean;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  sourceAssetId: string | null;
   canUndo: boolean;
   canRedo: boolean;
   isImporting: boolean;
@@ -1028,12 +1158,36 @@ function EditorMode({
   onPlaybackTimeUpdate: (time: number) => void;
   onSelectClip: (id: string | null) => void;
   onSelectOverlay: (id: string | null) => void;
+  onSelectSourceAsset: (id: string) => void;
+  onInsertEdit: (assetId: string, sIn: number, sOut: number, targetTrackId: string) => void;
+  onOverwriteEdit: (assetId: string, sIn: number, sOut: number, targetTrackId: string) => void;
+  onSelectSequence: (id: string) => void;
+  onCreateSequence: (name: string, aspectRatio: "16:9" | "9:16" | "1:1" | "4:5", fps: number) => void;
+  onDuplicateSequence: (id: string) => void;
+  onRenameSequence: (id: string, newName: string) => void;
+  onDeleteSequence: (id: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onAddTextOverlay: (overlay: TextOverlay) => void;
 }) {
+  const [monitorView, setMonitorView] = useState<"program" | "dual" | "source">("dual");
+  const sourceAsset = (sourceAssetId ? doc.assets.find((a) => a.id === sourceAssetId) : null) || doc.assets[0] || null;
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+      {/* Sequence Switcher Bar */}
+      {doc.sequences && doc.sequences.length > 0 && (
+        <SequenceSelector
+          sequences={doc.sequences}
+          activeSequenceId={doc.activeSequenceId || doc.sequences[0].id}
+          onSelectSequence={onSelectSequence}
+          onCreateSequence={onCreateSequence}
+          onDuplicateSequence={onDuplicateSequence}
+          onRenameSequence={onRenameSequence}
+          onDeleteSequence={onDeleteSequence}
+        />
+      )}
+
       {/* Upper area: sidebar + preview + inspector */}
       <div className="flex flex-1 overflow-hidden min-h-0" style={{ minHeight: 0 }}>
         {/* Left sidebar: Media Library */}
@@ -1044,11 +1198,11 @@ function EditorMode({
           <MediaLibraryPanel
             doc={doc}
             liveAssets={liveAssets}
-            selectedAssetId={null}
+            selectedAssetId={sourceAssetId}
             isImporting={isImporting}
             importError={importError}
             onImport={onImport}
-            onSelectAsset={() => {}}
+            onSelectAsset={onSelectSourceAsset}
             onAuthorize={() => {}}
             onRelink={onRelink}
             onRemove={onRemove}
@@ -1057,16 +1211,80 @@ function EditorMode({
           />
         </div>
 
-        {/* Center: Preview */}
+        {/* Center: Dual / Single Monitors */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-black">
-          <TimelinePreview
-            timeline={timeline}
-            liveAssets={liveAssets}
-            currentTime={currentTime}
-            isPlaying={isPlaying}
-            onPlaybackTimeUpdate={onPlaybackTimeUpdate}
-            onPlayPause={onPlayPause}
-          />
+          {/* Monitor View Toggle Header */}
+          <div className="flex items-center justify-between px-3 py-1 bg-cs-bg-surface border-b border-cs-border-subtle text-xs shrink-0">
+            <span className="text-[11px] text-cs-text-tertiary font-semibold uppercase tracking-wider">
+              {monitorView === "dual"
+                ? "Source & Program Monitors"
+                : monitorView === "source"
+                ? "Source Monitor"
+                : "Program Monitor"}
+            </span>
+            <div className="flex items-center gap-1 bg-cs-bg-elevated rounded p-0.5 border border-cs-border-subtle">
+              <button
+                onClick={() => setMonitorView("source")}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  monitorView === "source"
+                    ? "bg-cs-bg-active text-cs-text-primary"
+                    : "text-cs-text-tertiary hover:text-cs-text-primary"
+                }`}
+                title="Show only Source Monitor"
+              >
+                Source
+              </button>
+              <button
+                onClick={() => setMonitorView("dual")}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  monitorView === "dual"
+                    ? "bg-cs-bg-active text-cs-text-primary"
+                    : "text-cs-text-tertiary hover:text-cs-text-primary"
+                }`}
+                title="Show Source and Program monitors side-by-side"
+              >
+                Dual Monitor
+              </button>
+              <button
+                onClick={() => setMonitorView("program")}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  monitorView === "program"
+                    ? "bg-cs-bg-active text-cs-text-primary"
+                    : "text-cs-text-tertiary hover:text-cs-text-primary"
+                }`}
+                title="Show only Program Monitor"
+              >
+                Program
+              </button>
+            </div>
+          </div>
+
+          {/* Monitors Workspace */}
+          <div className="flex-1 flex overflow-hidden min-h-0 divide-x divide-cs-border-subtle">
+            {(monitorView === "dual" || monitorView === "source") && (
+              <div className="flex-1 flex flex-col min-w-0">
+                <SourceMonitor
+                  asset={sourceAsset}
+                  liveItem={sourceAsset ? liveAssets.get(sourceAsset.id) : undefined}
+                  timeline={timeline}
+                  onInsertEdit={onInsertEdit}
+                  onOverwriteEdit={onOverwriteEdit}
+                />
+              </div>
+            )}
+            {(monitorView === "dual" || monitorView === "program") && (
+              <div className="flex-1 flex flex-col min-w-0">
+                <TimelinePreview
+                  timeline={timeline}
+                  liveAssets={liveAssets}
+                  currentTime={currentTime}
+                  isPlaying={isPlaying}
+                  onPlaybackTimeUpdate={onPlaybackTimeUpdate}
+                  onPlayPause={onPlayPause}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right: Inspector */}

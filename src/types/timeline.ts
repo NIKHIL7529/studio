@@ -11,7 +11,7 @@
 
 import type { ExportAspectRatio } from "./export.ts";
 
-export type TrackType = "video" | "audio";
+export type TrackType = "video" | "audio" | "title" | "caption";
 
 export interface TimelineClip {
   /** Stable UUID */
@@ -29,6 +29,12 @@ export interface TimelineClip {
   /** Volume multiplier: 0 = mute, 1 = 100% normal, > 1 = boost */
   volume: number;
   muted: boolean;
+  /** Optional grouping identifier for multi-clip group selection */
+  groupId?: string;
+  /** Optional linked clip ID (e.g. video linked to its corresponding audio track) */
+  linkedClipId?: string;
+  /** Playback speed factor (1.0 = normal, 0.5 = 2x slow motion, 2.0 = 2x fast) */
+  speed?: number;
 }
 
 export type TextOverlayType = "title" | "caption";
@@ -85,6 +91,33 @@ export interface TimelineTrack {
   order: number;
   muted: boolean;
   clips: TimelineClip[];
+  /** Whether track edits are locked against accidental modification */
+  locked?: boolean;
+  /** Whether track video is hidden / suppressed in preview and export */
+  hidden?: boolean;
+  /** Solo mode: when active, only solo tracks play audio */
+  solo?: boolean;
+  /** Sync-lock flag for ripple operations: shifting clips also ripples sync-locked tracks */
+  syncLocked?: boolean;
+  /** Track-level gain multiplier (1.0 = unity) */
+  volume?: number;
+  /** Track vertical height setting */
+  height?: "compact" | "normal" | "expanded" | number;
+}
+
+export interface TimelineMarker {
+  /** Stable UUID */
+  id: string;
+  /** Timeline position in seconds */
+  time: number;
+  /** Optional marker duration for spanned ranges */
+  duration?: number;
+  /** Label/title */
+  label: string;
+  /** Marker badge color (e.g. hex #3b82f6 or name) */
+  color: string;
+  /** Optional creator notes */
+  notes?: string;
 }
 
 export interface TimelineSettings {
@@ -96,4 +129,33 @@ export interface TimelineDocument {
   tracks: TimelineTrack[];
   textOverlays: TextOverlay[];
   settings: TimelineSettings;
+  /** Optional timeline markers */
+  markers?: TimelineMarker[];
+  /** In-point for sequence export or playback boundary (seconds) */
+  inPoint?: number | null;
+  /** Out-point for sequence export or playback boundary (seconds) */
+  outPoint?: number | null;
+  /** Sequence frame rate / timebase configuration */
+  timebase?: { fps: number };
+}
+
+export interface SequenceDocument {
+  /** Stable UUID */
+  id: string;
+  /** Display name of the sequence */
+  name: string;
+  /** Frame rate (e.g. 24, 25, 29.97, 30, 60) */
+  fps: number;
+  /** Frame width in pixels */
+  width: number;
+  /** Frame height in pixels */
+  height: number;
+  /** Aspect ratio profile */
+  aspectRatio: ExportAspectRatio;
+  /** Active timeline document for this sequence */
+  timeline: TimelineDocument;
+  /** Creation timestamp */
+  createdAt: string;
+  /** Modification timestamp */
+  updatedAt: string;
 }
