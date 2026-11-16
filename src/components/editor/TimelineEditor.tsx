@@ -23,6 +23,7 @@ import type {
   TimelineClip,
   TextOverlay,
   TimelineMarker,
+  TimelineTransition,
   TrackType,
 } from "../../types/timeline.ts";
 import type { LiveAssetItem } from "../../types/project.ts";
@@ -33,6 +34,8 @@ import {
   getTimelineDuration,
   trimClipStart,
   trimClipEnd,
+  addClipToTrack,
+  removeTransition,
 } from "../../lib/timeline/model.ts";
 import {
   rippleTrimStart,
@@ -57,7 +60,12 @@ import {
   ungroupClips,
   copyClips,
   pasteClips,
+  detachAudio,
 } from "../../lib/timeline/editingOperations.ts";
+import {
+  getTransitionTimeWindow,
+  getTransitionDefinition,
+} from "../../lib/transitions/transitionCatalog.ts";
 import {
   isInputTarget,
   computeSnapTargets,
@@ -80,9 +88,11 @@ export interface TimelineEditorProps {
   onPlayPause: () => void;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  selectedTransitionId?: string | null;
   selectedTrackId?: string | null;
   onSelectClip: (clipId: string | null) => void;
   onSelectOverlay: (overlayId: string | null) => void;
+  onSelectTransition?: (transId: string | null) => void;
   onSelectTrack?: (trackId: string | null) => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -270,7 +280,7 @@ function ClipBlock({
   onTrimEnd: (e: React.MouseEvent, clip: TimelineClip) => void;
   onRazorClick: (e: React.MouseEvent, clip: TimelineClip) => void;
   onContextAction: (
-    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup",
+    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
     clipId: string
   ) => void;
 }) {
@@ -469,6 +479,17 @@ function ClipBlock({
               Group Clips (Ctrl+G)
             </button>
           )}
+          {trackType === "video" && (
+            <button
+              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
+              onClick={() => {
+                setShowMenu(false);
+                onContextAction("detachAudio", clip.id);
+              }}
+            >
+              Detach Audio (Alt+A)
+            </button>
+          )}
           <div className="h-px bg-cs-border-subtle my-1" />
           <button
             className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-error"
@@ -489,6 +510,63 @@ function ClipBlock({
             Ripple Delete (Shift+Del)
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Transition Block ─────────────────────────────────────────────────────────
+
+function TransitionBlock({
+  transition,
+  pxPerSec,
+  isSelected,
+  onSelect,
+  onDelete,
+}: {
+  transition: TimelineTransition;
+  pxPerSec: number;
+  isSelected: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const window = getTransitionTimeWindow(transition);
+  const dur = window.end - window.start;
+  const left = window.start * pxPerSec;
+  const width = Math.max(16, dur * pxPerSec);
+  const def = getTransitionDefinition(transition.type);
+
+  return (
+    <div
+      className={`absolute top-1 bottom-1 rounded border z-20 flex items-center justify-between px-1.5 cursor-pointer select-none transition-shadow ${
+        isSelected
+          ? "border-emerald-400 bg-emerald-500/40 text-white shadow-lg ring-2 ring-emerald-300"
+          : "border-emerald-500/60 bg-emerald-600/30 text-emerald-200 hover:bg-emerald-500/40"
+      }`}
+      style={{ left, width }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
+      title={`Transition: ${def?.label || transition.type} (${dur.toFixed(2)}s)\nClick to inspect, Del to remove`}
+    >
+      <div className="flex items-center gap-1 overflow-hidden pointer-events-none">
+        <span className="text-[10px]">✨</span>
+        <span className="text-[10px] font-semibold truncate leading-none">
+          {width > 35 ? (def?.label || transition.type) : ""}
+        </span>
+      </div>
+      {isSelected && (
+        <button
+          className="w-3.5 h-3.5 rounded-full bg-black/40 hover:bg-red-500 text-[10px] flex items-center justify-center text-white shrink-0 ml-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Remove transition"
+        >
+          ×
+        </button>
       )}
     </div>
   );
@@ -604,9 +682,11 @@ export function TimelineEditor({
   onPlayPause,
   selectedClipId,
   selectedOverlayId,
+  selectedTransitionId,
   selectedTrackId,
   onSelectClip,
   onSelectOverlay,
+  onSelectTransition,
   onSelectTrack,
   canUndo,
   canRedo,
@@ -876,9 +956,14 @@ export function TimelineEditor({
         return;
       }
 
-      // Lift / Ripple Delete
+      // Lift / Ripple Delete or remove transition
       if (e.code === "Delete" || e.code === "Backspace") {
         e.preventDefault();
+        if (selectedTransitionId) {
+          onTimelineChange(removeTransition(timeline, selectedTransitionId));
+          onSelectTransition?.(null);
+          return;
+        }
         const targetIds = selectedClipIds.length > 0 ? selectedClipIds : selectedClipId ? [selectedClipId] : [];
         if (targetIds.length > 0) {
           if (e.shiftKey) {
@@ -889,6 +974,14 @@ export function TimelineEditor({
           onSelectClip(null);
           setSelectedClipIds([]);
         }
+        return;
+      }
+
+      // Detach Audio
+      if (e.code === "KeyA" && e.altKey && selectedClipId) {
+        e.preventDefault();
+        const res = detachAudio(timeline, selectedClipId);
+        if (res) onTimelineChange(res.timeline);
         return;
       }
 
@@ -969,9 +1062,15 @@ export function TimelineEditor({
   // Context Actions Handler
   const handleContextAction = useCallback(
     (
-      action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup",
+      action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
       clipId: string
     ) => {
+      if (action === "detachAudio") {
+        const res = detachAudio(timeline, clipId);
+        if (res) onTimelineChange(res.timeline);
+        return;
+      }
+
       const targetIds = selectedClipIds.includes(clipId) ? selectedClipIds : [clipId];
 
       if (action === "lift") {
@@ -1000,6 +1099,23 @@ export function TimelineEditor({
       }
     },
     [timeline, selectedClipIds, currentTime, onTimelineChange, onSelectClip]
+  );
+
+  const handleRemoveTransition = useCallback(
+    (transitionId: string) => {
+      onTimelineChange(removeTransition(timeline, transitionId));
+      if (selectedTransitionId === transitionId) {
+        onSelectTransition?.(null);
+      }
+    },
+    [timeline, selectedTransitionId, onTimelineChange, onSelectTransition]
+  );
+
+  const handleAddClip = useCallback(
+    (trackId: string, clip: TimelineClip) => {
+      onTimelineChange(addClipToTrack(timeline, trackId, clip));
+    },
+    [timeline, onTimelineChange]
   );
 
   // Zoom controls
@@ -1325,15 +1441,21 @@ export function TimelineEditor({
                 <TrackLane
                   key={track.id}
                   track={track}
+                  timeline={timeline}
                   pxPerSec={pxPerSec}
                   liveAssets={liveAssets}
                   selectedClipId={selectedClipId}
+                  selectedTransitionId={selectedTransitionId}
                   activeTool={activeTool}
                   onSelectClip={onSelectClip}
+                  onSelectTransition={onSelectTransition}
+                  onRemoveTransition={handleRemoveTransition}
+                  onAddClip={handleAddClip}
                   onLaneClick={() => {
                     onSelectClip(null);
                     onSelectOverlay(null);
                     onSelectTrack?.(null);
+                    onSelectTransition?.(null);
                     setSelectedClipIds([]);
                   }}
                   onClipDragStart={handleClipDragStart}
@@ -1354,6 +1476,7 @@ export function TimelineEditor({
                   onSelectClip(null);
                   onSelectOverlay(null);
                   onSelectTrack?.(null);
+                  onSelectTransition?.(null);
                 }}
               >
                 {timeline.textOverlays.map((overlay) => (
@@ -1368,6 +1491,7 @@ export function TimelineEditor({
                       onSelectClip(null);
                       onSelectOverlay(overlay.id);
                       onSelectTrack?.(null);
+                      onSelectTransition?.(null);
                     }}
                   />
                 ))}
@@ -1521,11 +1645,16 @@ function TrackHeader({
 
 function TrackLane({
   track,
+  timeline,
   pxPerSec,
   liveAssets,
   selectedClipId,
+  selectedTransitionId,
   activeTool,
   onSelectClip,
+  onSelectTransition,
+  onRemoveTransition,
+  onAddClip,
   onLaneClick,
   onClipDragStart,
   onTrimStart,
@@ -1536,18 +1665,23 @@ function TrackLane({
   style,
 }: {
   track: TimelineTrack;
+  timeline: TimelineDocument;
   pxPerSec: number;
   liveAssets: Map<string, LiveAssetItem>;
   selectedClipId: string | null;
+  selectedTransitionId?: string | null;
   activeTool: EditingTool;
   onSelectClip: (id: string | null) => void;
+  onSelectTransition?: (id: string | null) => void;
+  onRemoveTransition?: (id: string) => void;
+  onAddClip?: (trackId: string, clip: TimelineClip) => void;
   onLaneClick: () => void;
   onClipDragStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimEnd: (e: React.MouseEvent, clip: TimelineClip) => void;
   onRazorClick: (e: React.MouseEvent, clip: TimelineClip) => void;
   onContextAction: (
-    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup",
+    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
     clipId: string
   ) => void;
   onCloseGap: (gapStart: number) => void;
@@ -1561,6 +1695,46 @@ function TrackLane({
     onCloseGap(clickTime);
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const assetId =
+      e.dataTransfer.getData("application/x-content-studio-asset-id") ||
+      e.dataTransfer.getData("text/plain");
+    if (!assetId) return;
+
+    const liveItem = liveAssets.get(assetId);
+    if (!liveItem) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const dropX = e.clientX - rect.left;
+    const dropTime = Math.max(0, dropX / pxPerSec);
+
+    const mediaDuration =
+      liveItem.asset.metadata?.duration && liveItem.asset.metadata.duration > 0
+        ? liveItem.asset.metadata.duration
+        : 5;
+
+    const newClip: TimelineClip = {
+      id: crypto.randomUUID(),
+      assetId,
+      trackId: track.id,
+      startTime: dropTime,
+      sourceIn: 0,
+      sourceOut: mediaDuration,
+      volume: 1,
+      muted: false,
+    };
+
+    onAddClip?.(track.id, newClip);
+  };
+
+  const trackTransitions = (timeline.transitions || []).filter((tr) => tr.trackId === track.id);
+
   return (
     <div
       className={`absolute left-0 right-0 border-b border-cs-border-subtle ${
@@ -1569,6 +1743,8 @@ function TrackLane({
       style={{ ...style, height: TRACK_HEIGHT }}
       onClick={onLaneClick}
       onContextMenu={handleLaneContextMenu}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       {track.clips.length === 0 && (
         <div className="flex items-center h-full px-4 pointer-events-none">
@@ -1578,6 +1754,7 @@ function TrackLane({
         </div>
       )}
 
+      {/* Render clips on this track */}
       {track.clips.map((clip) => {
         const liveItem = liveAssets.get(clip.assetId);
         const assetName = liveItem?.asset.name ?? clip.assetId;
@@ -1603,6 +1780,18 @@ function TrackLane({
           />
         );
       })}
+
+      {/* Render transitions on this track */}
+      {trackTransitions.map((trans) => (
+        <TransitionBlock
+          key={trans.id}
+          transition={trans}
+          pxPerSec={pxPerSec}
+          isSelected={selectedTransitionId === trans.id}
+          onSelect={() => onSelectTransition?.(trans.id)}
+          onDelete={() => onRemoveTransition?.(trans.id)}
+        />
+      ))}
     </div>
   );
 }

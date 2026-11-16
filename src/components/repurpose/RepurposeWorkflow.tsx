@@ -29,6 +29,7 @@ import { REPURPOSE_OBJECTIVES } from "../../types/repurpose.ts";
 import type { ExportAspectRatio } from "../../types/export.ts";
 import { runRepurposePipeline, type RepurposePipelineResult } from "../../lib/repurpose/pipeline.ts";
 import { applyEditPlanToTimeline, createEditPlanFromCandidates } from "../../lib/repurpose/editPlan.ts";
+import { generateCaptionsForTimeline } from "../../lib/transcription/captionGenerator.ts";
 import { parseSubtitleFileContent } from "../../lib/transcription/subtitleParser.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { formatBytes } from "../../lib/projectValidation.ts";
@@ -89,6 +90,9 @@ export function RepurposeWorkflow({
     Map<string, { filename: string; cueCount: number; format: string }>
   >(new Map());
   const [enableTranscription, setEnableTranscription] = useState(false);
+  const [generateCaptionsForSequence, setGenerateCaptionsForSequence] = useState(false);
+  const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
+  const [captionProgressText, setCaptionProgressText] = useState("");
   const [selectedModelName, setSelectedModelName] = useState<"whisper-tiny_timestamped" | "whisper-base_timestamped">(
     "whisper-tiny_timestamped"
   );
@@ -252,7 +256,7 @@ export function RepurposeWorkflow({
   };
 
   // Apply selected candidates to timeline sequence
-  const handleApplyToTimeline = () => {
+  const handleApplyToTimeline = async () => {
     const selected = candidates.filter((c) => c.selected);
     if (selected.length === 0) {
       alert("Please select at least one candidate moment to generate a timeline sequence.");
@@ -273,18 +277,91 @@ export function RepurposeWorkflow({
       return;
     }
 
-    const { timeline: updatedTimeline, errors } = applyEditPlanToTimeline(
-      editPlan,
-      currentTimeline,
-      pipelineResult?.sourceTranscripts
-    );
+    let updatedTimeline: TimelineDocument;
+    let errors: string[] = [];
+
+    if (!generateCaptionsForSequence) {
+      // User opted OUT of captions (default) -> No caption track created
+      const res = applyEditPlanToTimeline(
+        editPlan,
+        currentTimeline,
+        undefined,
+        { generateCaptions: false }
+      );
+      updatedTimeline = res.timeline;
+      errors = res.errors;
+    } else {
+      // User opted IN to caption generation
+      // 1. If pipelineResult already has transcripts for all selected segments, map them directly
+      const hasPrecomputedTranscripts =
+        pipelineResult?.sourceTranscripts &&
+        selected.every((cand) => pipelineResult.sourceTranscripts!.has(cand.sourceAssetId));
+
+      if (hasPrecomputedTranscripts) {
+        const res = applyEditPlanToTimeline(
+          editPlan,
+          currentTimeline,
+          pipelineResult?.sourceTranscripts,
+          { generateCaptions: true }
+        );
+        updatedTimeline = res.timeline;
+        errors = res.errors;
+      } else {
+        // Build base timeline without captions first
+        const baseRes = applyEditPlanToTimeline(
+          editPlan,
+          currentTimeline,
+          undefined,
+          { generateCaptions: false }
+        );
+        updatedTimeline = baseRes.timeline;
+        errors = baseRes.errors;
+
+        // Run local sequence audio transcription
+        setIsGeneratingCaptions(true);
+        setCaptionProgressText("Initializing sequence audio for transcription...");
+
+        try {
+          const generatedCues = await generateCaptionsForTimeline(
+            updatedTimeline,
+            liveAssets,
+            {
+              modelName: selectedModelName,
+              onProgress: (p, text) => {
+                setCaptionProgressText(`${text} (${p}%)`);
+              },
+            }
+          );
+
+          updatedTimeline = {
+            ...updatedTimeline,
+            textOverlays: [...(updatedTimeline.textOverlays || []), ...generatedCues],
+            settings: {
+              ...updatedTimeline.settings,
+              includeCaptionsInExport: true,
+              captionsVisible: true,
+            },
+          };
+        } catch (err: unknown) {
+          console.warn("Local sequence transcription failed or cancelled:", err);
+          const shouldContinue = confirm(
+            `Local caption generation encountered an issue (${err instanceof Error ? err.message : String(err)}). Would you like to open the sequence in the Editor without captions?`
+          );
+          if (!shouldContinue) {
+            setIsGeneratingCaptions(false);
+            return;
+          }
+        } finally {
+          setIsGeneratingCaptions(false);
+        }
+      }
+    }
 
     if (errors.length > 0) {
       alert(`Timeline validation warning: ${errors.join(" ")}`);
     }
 
-    const captionCount = updatedTimeline.textOverlays?.length || 0;
-
+    const captionCount = updatedTimeline.textOverlays?.filter((o) => o.overlayType === "caption").length || 0;
     const reason = `Repurpose: ${REPURPOSE_OBJECTIVES[objective].label} (${selected.length} clips, ${editPlan.totalDuration.toFixed(1)}s, ${captionCount} caption cues)`;
     onApplyTimelineSequence(updatedTimeline, reason);
   };
@@ -332,13 +409,13 @@ export function RepurposeWorkflow({
               variant="primary"
               size="sm"
               onClick={handleApplyToTimeline}
-              disabled={selectedCount === 0 || isAnalyzing}
+              disabled={selectedCount === 0 || isAnalyzing || isGeneratingCaptions}
               className="flex items-center gap-1.5"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" strokeWidth="2.5" stroke="currentColor">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
-              <span>Open in Timeline ({selectedCount})</span>
+              <span>{isGeneratingCaptions ? "Generating Captions..." : `Open in Timeline (${selectedCount})`}</span>
             </Button>
           )}
           <Button variant="secondary" size="sm" onClick={onCloseWorkflow}>
@@ -609,26 +686,73 @@ export function RepurposeWorkflow({
                         {formatDuration(totalSelectedDuration)}
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-cs-text-tertiary">Timed Captions</span>
-                      <span className="text-cs-success font-medium">
-                        {pipelineResult?.sourceTranscripts && pipelineResult.sourceTranscripts.size > 0
-                          ? "Generated on Timeline text track"
-                          : "None (no transcript provided)"}
-                      </span>
+                    {/* Optional Caption Generation Section */}
+                    <div className="p-3 bg-cs-bg-base/70 border border-cs-border-subtle rounded-lg flex flex-col gap-2.5 mt-1">
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="checkbox"
+                          id="repurpose-caption-toggle"
+                          checked={generateCaptionsForSequence}
+                          onChange={(e) => setGenerateCaptionsForSequence(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-cs-border-default bg-cs-bg-surface text-cs-accent accent-cs-accent cursor-pointer"
+                        />
+                        <label htmlFor="repurpose-caption-toggle" className="cursor-pointer select-none">
+                          <span className="text-xs font-semibold text-cs-text-primary block">
+                            Generate captions for the selected sequence
+                          </span>
+                          <span className="text-[11px] text-cs-text-secondary block mt-0.5 leading-tight">
+                            Transcribes the assembled sequence audio in sequence-relative time and transfers editable caption cues into the Editor.
+                          </span>
+                        </label>
+                      </div>
+
+                      {generateCaptionsForSequence && (
+                        <div className="pl-6.5 flex flex-col gap-2 pt-2 border-t border-cs-border-subtle/40">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-cs-text-tertiary">Local Model:</span>
+                            <select
+                              value={selectedModelName}
+                              onChange={(e) => setSelectedModelName(e.target.value as any)}
+                              className="bg-cs-bg-elevated border border-cs-border-default rounded px-2 py-1 text-xs text-cs-text-primary font-medium"
+                            >
+                              <option value="whisper-tiny_timestamped">Whisper Tiny (~39 MB, Word Timings)</option>
+                              <option value="whisper-base_timestamped">Whisper Base (~74 MB, Word Timings)</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-cs-text-tertiary">
+                            <span className="w-1.5 h-1.5 rounded-full bg-cs-success" />
+                            <span>100% On-Device • Zero Cloud Uploads • Native Sequence Time</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
+
+                    {isGeneratingCaptions && (
+                      <div className="p-3 rounded-lg bg-cs-primary/10 border border-cs-primary/20 text-xs flex items-center gap-2 text-cs-primary">
+                        <svg className="animate-spin w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="10" />
+                        </svg>
+                        <span className="truncate">{captionProgressText || "Transcribing sequence audio..."}</span>
+                      </div>
+                    )}
 
                     <Button
                       variant="primary"
                       size="md"
                       onClick={handleApplyToTimeline}
-                      disabled={selectedCount === 0}
-                      className="w-full mt-3 flex items-center justify-center gap-2"
+                      disabled={selectedCount === 0 || isGeneratingCaptions}
+                      className="w-full mt-2 flex items-center justify-center gap-2"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" strokeWidth="2.5" stroke="currentColor">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
-                      <span>Open in Timeline with Captions</span>
+                      <span>
+                        {isGeneratingCaptions
+                          ? "Generating Captions..."
+                          : generateCaptionsForSequence
+                          ? `Open in Timeline with Captions (${selectedCount})`
+                          : `Open in Timeline (${selectedCount})`}
+                      </span>
                     </Button>
                   </div>
                 </Panel>

@@ -39,6 +39,10 @@ import {
 } from "../../lib/export/history.ts";
 import { formatBytes } from "../../lib/projectValidation.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
+import {
+  serializeTextOverlaysToSrt,
+  serializeTextOverlaysToVtt,
+} from "../../lib/transcription/subtitleParser.ts";
 import { Button, Modal } from "@/components/ui";
 
 export interface ExportModalProps {
@@ -85,6 +89,15 @@ export function ExportModal({
 
   const [filename, setFilename] = useState<string>(() => computeDefaultFilename("1080p", "mp4"));
   const [hasCustomFilename, setHasCustomFilename] = useState<boolean>(false);
+
+  // Captions & Subtitles settings
+  const hasCaptions = timeline.textOverlays.some((o) => o.overlayType === "caption");
+  const hasOverlays = timeline.textOverlays.length > 0;
+  const [includeCaptions, setIncludeCaptions] = useState<boolean>(
+    timeline.settings?.includeCaptionsInExport ?? (hasCaptions || hasOverlays)
+  );
+  const [exportSidecar, setExportSidecar] = useState<boolean>(false);
+  const [sidecarFormat, setSidecarFormat] = useState<"srt" | "vtt">("srt");
 
   // Preflight capability report
   const [capabilities, setCapabilities] = useState<ExportCapabilitiesReport | null>(null);
@@ -145,8 +158,23 @@ export function ExportModal({
       audioCodec: format === "webm" ? "opus" : "aac",
       quality,
       filename,
+      includeCaptions,
+      exportSidecarSubtitles: exportSidecar,
+      sidecarFormat,
     };
-  }, [aspectRatio, preset, dimensions, frameRate, format, quality, filename, project.name]);
+  }, [
+    aspectRatio,
+    preset,
+    dimensions,
+    frameRate,
+    format,
+    quality,
+    filename,
+    includeCaptions,
+    exportSidecar,
+    sidecarFormat,
+    project.name,
+  ]);
 
   // Render plan preview & validation
   const plan = useMemo(() => {
@@ -246,6 +274,24 @@ export function ExportModal({
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    // Download sidecar subtitle if requested
+    if (exportSidecar && timeline.textOverlays.length > 0) {
+      const subContent =
+        sidecarFormat === "vtt"
+          ? serializeTextOverlaysToVtt(timeline.textOverlays)
+          : serializeTextOverlaysToSrt(timeline.textOverlays);
+      const subBlob = new Blob([subContent], { type: "text/plain;charset=utf-8" });
+      const subUrl = URL.createObjectURL(subBlob);
+      const subA = document.createElement("a");
+      const baseName = completedResult.finalFilename.replace(/\.[^/.]+$/, "");
+      subA.href = subUrl;
+      subA.download = `${baseName}.${sidecarFormat}`;
+      document.body.appendChild(subA);
+      subA.click();
+      document.body.removeChild(subA);
+      setTimeout(() => URL.revokeObjectURL(subUrl), 1000);
+    }
   };
 
   if (!isOpen) return null;
@@ -550,6 +596,56 @@ export function ExportModal({
                 }}
                 className="w-full bg-cs-bg-surface border border-cs-border-subtle rounded px-2.5 py-1.5 text-xs text-cs-text font-mono focus:outline-none focus:border-cs-accent"
               />
+            </div>
+
+            {/* Captions & Subtitles Section */}
+            <div className="p-3 rounded border border-cs-border-subtle bg-cs-bg-surface space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-cs-text flex items-center gap-1.5">
+                  <span className="text-amber-400">💬</span> Captions & Subtitles
+                </span>
+                <span className="text-[11px] text-cs-text-tertiary">
+                  {timeline.textOverlays.length} {timeline.textOverlays.length === 1 ? "cue" : "cues"} in sequence
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-cs-text select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeCaptions}
+                    onChange={(e) => setIncludeCaptions(e.target.checked)}
+                    className="rounded border-cs-border-subtle text-cs-accent focus:ring-0"
+                  />
+                  <span>Burn captions and titles into exported video</span>
+                </label>
+
+                <div className="flex items-center justify-between pt-1 border-t border-cs-border-subtle/40">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-cs-text select-none">
+                    <input
+                      type="checkbox"
+                      checked={exportSidecar}
+                      onChange={(e) => setExportSidecar(e.target.checked)}
+                      className="rounded border-cs-border-subtle text-cs-accent focus:ring-0"
+                    />
+                    <span>Export subtitle sidecar file</span>
+                  </label>
+
+                  {exportSidecar && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-cs-text-secondary">Format:</span>
+                      <select
+                        value={sidecarFormat}
+                        onChange={(e) => setSidecarFormat(e.target.value as "srt" | "vtt")}
+                        className="bg-cs-bg-elevated border border-cs-border-subtle rounded px-2 py-0.5 text-xs text-cs-text font-mono"
+                      >
+                        <option value="srt">SRT (.srt)</option>
+                        <option value="vtt">VTT (.vtt)</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Preflight & Capability Status Card */}

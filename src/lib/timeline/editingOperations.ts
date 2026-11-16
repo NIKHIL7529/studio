@@ -492,6 +492,81 @@ export function rippleDeleteClips(
   return current;
 }
 
+
+
+// ─── Detach Audio Operation ───────────────────────────────────────────────────
+
+/**
+ * Detaches audio from a video clip by creating a linked audio clip on an audio track.
+ * By default, disables embedded audio on the video clip so duplicate audio is not played.
+ */
+export function detachAudio(
+  timeline: TimelineDocument,
+  videoClipId: string,
+  options: { disableEmbeddedAudio?: boolean; targetAudioTrackId?: string } = {}
+): { timeline: TimelineDocument; audioClipId: string } | null {
+  const found = findClipWithTrack(timeline, videoClipId);
+  if (!found || found.track.type !== "video") return null;
+
+  const { clip: videoClip } = found;
+  const disableEmbedded = options.disableEmbeddedAudio ?? true;
+
+  const current = deepCloneTimeline(timeline);
+
+  // Find or create suitable audio track
+  let targetAudioTrack: TimelineTrack | undefined;
+  if (options.targetAudioTrackId) {
+    targetAudioTrack = current.tracks.find((t) => t.id === options.targetAudioTrackId && t.type === "audio");
+  }
+  if (!targetAudioTrack) {
+    targetAudioTrack = current.tracks.find((t) => t.type === "audio" && !t.locked);
+  }
+  if (!targetAudioTrack) {
+    // Create new audio track
+    const newTrackId = crypto.randomUUID();
+    targetAudioTrack = {
+      id: newTrackId,
+      type: "audio",
+      name: `Audio ${current.tracks.filter((t) => t.type === "audio").length + 1}`,
+      order: current.tracks.length,
+      muted: false,
+      clips: [],
+    };
+    current.tracks.push(targetAudioTrack);
+  }
+
+  const audioClipId = crypto.randomUUID();
+  const audioClip: TimelineClip = {
+    id: audioClipId,
+    assetId: videoClip.assetId,
+    trackId: targetAudioTrack.id,
+    startTime: videoClip.startTime,
+    sourceIn: videoClip.sourceIn,
+    sourceOut: videoClip.sourceOut,
+    volume: videoClip.volume,
+    muted: false,
+    speed: videoClip.speed,
+    linkedClipId: videoClip.id,
+  };
+
+  targetAudioTrack.clips.push(audioClip);
+
+  // Update video clip: link to audio clip, and set embeddedAudioDisabled
+  for (const track of current.tracks) {
+    for (let i = 0; i < track.clips.length; i++) {
+      if (track.clips[i].id === videoClipId) {
+        track.clips[i] = {
+          ...track.clips[i],
+          linkedClipId: audioClipId,
+          embeddedAudioDisabled: disableEmbedded,
+        };
+      }
+    }
+  }
+
+  return { timeline: current, audioClipId };
+}
+
 // ─── Close Gap ────────────────────────────────────────────────────────────────
 
 /**
@@ -1113,3 +1188,5 @@ export function pasteClips(
 
   return current;
 }
+
+

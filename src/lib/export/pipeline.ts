@@ -27,6 +27,8 @@ import { createWorkspaceProgressiveWriter } from "./progressiveWriter.ts";
 import { validateExportedMedia } from "./validation.ts";
 import { lockCacheResource, unlockCacheResource } from "../cache/cacheManager.ts";
 import { AudioTrackMixer } from "./audioRenderer.ts";
+import { evaluateCompositionAtTime, renderOverlayOnCanvas } from "../composition/evaluator.ts";
+import { renderTransition } from "../transitions/renderers.ts";
 import type { TextOverlay } from "../../types/timeline.ts";
 import type {
   RenderPlan,
@@ -449,8 +451,111 @@ export async function renderAndExport(
         ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-        // 2. Render active video clip if present
-        if (frame.activeClip) {
+        // 2. Evaluate composition if timeline is present
+        const comp = plan.timeline
+          ? evaluateCompositionAtTime(plan.timeline, frame.presentationTimeSeconds, {
+              forExport: true,
+              includeCaptions: plan.settings.includeCaptions !== false,
+            })
+          : null;
+
+        if (comp && comp.activeTransitions.length > 0) {
+          // Render active transition
+          const activeTrans = comp.activeTransitions[0];
+          const fromClip = activeTrans.fromClip;
+          const toClip = activeTrans.toClip;
+
+          let fromCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+          let toCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+
+          if (fromClip) {
+            const sink = canvasSinks.get(fromClip.assetId);
+            if (sink) {
+              const offset = Math.max(0, frame.presentationTimeSeconds - fromClip.startTime);
+              const srcTime = fromClip.sourceIn + offset;
+              try {
+                const wrapped = await sink.getCanvas(srcTime);
+                if (wrapped?.canvas) fromCanvas = wrapped.canvas;
+              } catch {}
+            }
+          }
+
+          if (toClip) {
+            const sink = canvasSinks.get(toClip.assetId);
+            if (sink) {
+              const offset = Math.max(0, frame.presentationTimeSeconds - toClip.startTime);
+              const srcTime = toClip.sourceIn + offset;
+              try {
+                const wrapped = await sink.getCanvas(srcTime);
+                if (wrapped?.canvas) toCanvas = wrapped.canvas;
+              } catch {}
+            }
+          }
+
+          const drawFrom = (targetCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
+            if (fromCanvas) {
+              targetCtx.drawImage(fromCanvas, 0, 0, canvasWidth, canvasHeight);
+            }
+          };
+
+          const drawTo = (targetCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
+            if (toCanvas) {
+              targetCtx.drawImage(toCanvas, 0, 0, canvasWidth, canvasHeight);
+            }
+          };
+
+          renderTransition(
+            ctx,
+            canvasWidth,
+            canvasHeight,
+            activeTrans.transition,
+            activeTrans.progress,
+            drawFrom,
+            drawTo
+          );
+        } else if (comp && comp.activeClips.length > 0) {
+          // Render multi-track clips with evaluated transforms
+          for (const evalClip of comp.activeClips) {
+            const sink = canvasSinks.get(evalClip.clip.assetId);
+            if (sink) {
+              try {
+                const wrapped = await sink.getCanvas(evalClip.sourceTime);
+                if (wrapped?.canvas) {
+                  ctx.save();
+                  const tr = evalClip.transform;
+                  ctx.globalAlpha = tr.opacity;
+                  if (
+                    tr.positionX !== 0 ||
+                    tr.positionY !== 0 ||
+                    tr.scaleX !== 1 ||
+                    tr.scaleY !== 1 ||
+                    tr.rotation !== 0
+                  ) {
+                    ctx.translate(
+                      canvasWidth / 2 + (tr.positionX * canvasWidth) / 100,
+                      canvasHeight / 2 + (tr.positionY * canvasHeight) / 100
+                    );
+                    ctx.rotate((tr.rotation * Math.PI) / 180);
+                    ctx.scale(tr.scaleX, tr.scaleY);
+                    ctx.drawImage(
+                      wrapped.canvas,
+                      -canvasWidth / 2,
+                      -canvasHeight / 2,
+                      canvasWidth,
+                      canvasHeight
+                    );
+                  } else {
+                    ctx.drawImage(wrapped.canvas, 0, 0, canvasWidth, canvasHeight);
+                  }
+                  ctx.restore();
+                }
+              } catch (err) {
+                console.warn(`Frame ${f}: failed to decode source canvas`, err);
+              }
+            }
+          }
+        } else if (frame.activeClip) {
+          // Fallback legacy render path
           const sink = canvasSinks.get(frame.activeClip.assetId);
           if (sink) {
             try {
@@ -464,8 +569,12 @@ export async function renderAndExport(
           }
         }
 
-        // 3. Render active text overlays
-        if (frame.activeOverlays.length > 0) {
+        // 3. Render overlays / captions
+        if (comp && comp.activeOverlays.length > 0) {
+          for (const evalOverlay of comp.activeOverlays) {
+            renderOverlayOnCanvas(ctx, evalOverlay, canvasWidth, canvasHeight);
+          }
+        } else if (frame.activeOverlays.length > 0) {
           for (const overlay of frame.activeOverlays) {
             renderTextOverlayToCanvas(ctx, overlay, canvasWidth, canvasHeight);
           }

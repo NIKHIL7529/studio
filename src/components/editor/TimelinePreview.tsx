@@ -19,6 +19,12 @@ import type { TimelineDocument, TimelineClip, TextOverlay } from "../../types/ti
 import type { LiveAssetItem } from "../../types/project.ts";
 import { getActiveClipAtTime, getActiveTextOverlaysAtTime, getTimelineDuration } from "../../lib/timeline/model.ts";
 import { ObjectUrlManager } from "../../lib/media/previewSource.ts";
+import { evaluateClipTransform, evaluateOverlayAnimation } from "../../lib/animation/animationPresets.ts";
+import {
+  getTransitionProgress,
+  getTransitionDefinition,
+  getTransitionTimeWindow,
+} from "../../lib/transitions/transitionCatalog.ts";
 
 export interface TimelinePreviewProps {
   timeline: TimelineDocument;
@@ -71,9 +77,9 @@ export function TimelinePreview({
   const targetAspectRatio = timeline.settings?.targetAspectRatio || "16:9";
   const ratioValue =
     targetAspectRatio === "9:16" ? 9 / 16 :
-    targetAspectRatio === "1:1" ? 1 :
-    targetAspectRatio === "4:5" ? 4 / 5 :
-    16 / 9;
+      targetAspectRatio === "1:1" ? 1 :
+        targetAspectRatio === "4:5" ? 4 / 5 :
+          16 / 9;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -113,6 +119,19 @@ export function TimelinePreview({
   const activeClip = getActiveClipAtTime(timeline, currentTime);
   const activeOverlays = getActiveTextOverlaysAtTime(timeline, currentTime);
   const totalDuration = getTimelineDuration(timeline);
+
+  // Keyframes and transform evaluation
+  const evaluatedTransform = activeClip ? evaluateClipTransform(activeClip, currentTime) : null;
+
+  // Active transitions evaluation
+  const activeTransitions = (timeline.transitions || []).map((tr) => {
+    const window = getTransitionTimeWindow(tr);
+    if (currentTime >= window.start && currentTime <= window.end) {
+      const prog = getTransitionProgress(tr, currentTime);
+      return { transition: tr, progress: prog, def: getTransitionDefinition(tr.type) };
+    }
+    return null;
+  }).filter(Boolean) as { transition: any; progress: number; def: any }[];
 
   // Active clip asset info
   const activeLiveItem = activeClip ? liveAssets.get(activeClip.assetId) : null;
@@ -370,16 +389,34 @@ export function TimelinePreview({
           <video
             ref={videoRef}
             className={`w-full h-full object-contain ${!activeClip || isFileMissing ? "hidden" : ""}`}
+            style={{
+              transform: evaluatedTransform
+                ? `translate(${evaluatedTransform.positionX}%, ${evaluatedTransform.positionY}%) scale(${evaluatedTransform.scaleX}, ${evaluatedTransform.scaleY}) rotate(${evaluatedTransform.rotation}deg)`
+                : undefined,
+              opacity: evaluatedTransform ? evaluatedTransform.opacity : undefined,
+              transformOrigin: "center center",
+            }}
             playsInline
             onClick={() => {
               if (playbackBlocked) {
                 setPlaybackBlocked(false);
-                videoRef.current?.play().catch(() => {});
+                videoRef.current?.play().catch(() => { });
               } else {
                 onPlayPause();
               }
             }}
           />
+
+          {/* Active Transition Indicator Badge */}
+          {activeTransitions.length > 0 && (
+            <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/85 border border-emerald-500/40 text-[11px] text-emerald-300 z-20 shadow-lg pointer-events-none">
+              <span>✨</span>
+              <span>
+                {activeTransitions[0].def?.name || activeTransitions[0].transition.type} (
+                {Math.round(activeTransitions[0].progress * 100)}%)
+              </span>
+            </div>
+          )}
 
           {/* Actionable Overlay: Missing / Unlinked Source File */}
           {activeClip && isFileMissing && (
@@ -428,7 +465,7 @@ export function TimelinePreview({
             <div
               onClick={() => {
                 setPlaybackBlocked(false);
-                videoRef.current?.play().catch(() => {});
+                videoRef.current?.play().catch(() => { });
               }}
               className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center bg-black/60 cursor-pointer z-30"
             >
@@ -463,6 +500,7 @@ export function TimelinePreview({
             <TextOverlayRenderer
               key={overlay.id}
               overlay={overlay}
+              currentTime={currentTime}
               compWidth={compSize.width}
               compHeight={compSize.height}
             />
@@ -562,20 +600,23 @@ export function TimelinePreview({
  */
 function TextOverlayRenderer({
   overlay,
+  currentTime,
   compWidth,
   compHeight,
 }: {
   overlay: TextOverlay;
+  currentTime: number;
   compWidth: number;
   compHeight: number;
 }) {
+  const animated = evaluateOverlayAnimation(overlay, currentTime);
   const isCaption = overlay.overlayType === "caption";
   const alignClass =
     overlay.align === "center"
       ? "text-center"
       : overlay.align === "right"
-      ? "text-right"
-      : "text-left";
+        ? "text-right"
+        : "text-left";
 
   const scale = (compHeight > 0 ? compHeight : 720) / 720;
   const fontSize = Math.max(10, Math.round(overlay.fontSize * scale));
@@ -594,12 +635,17 @@ function TextOverlayRenderer({
   const borderRadius = Math.round(8 * scale);
 
   // Position transform based on align
-  const transform =
+  const baseTransform =
     overlay.align === "left"
       ? "translate(0, -50%)"
       : overlay.align === "right"
-      ? "translate(-100%, -50%)"
-      : "translate(-50%, -50%)";
+        ? "translate(-100%, -50%)"
+        : "translate(-50%, -50%)";
+
+  const finalTransform =
+    animated.offsetY !== 0
+      ? `${baseTransform} translateY(${animated.offsetY}px)`
+      : baseTransform;
 
   return (
     <div
@@ -607,7 +653,8 @@ function TextOverlayRenderer({
       style={{
         left: `${overlay.x * 100}%`,
         top: `${overlay.y * 100}%`,
-        transform,
+        transform: finalTransform,
+        opacity: animated.opacity,
         fontSize: `${fontSize}px`,
         color: overlay.color || "#ffffff",
         maxWidth: `${maxWidthPx}px`,
@@ -628,7 +675,7 @@ function TextOverlayRenderer({
             : undefined,
       }}
     >
-      {overlay.text}
+      {animated.renderedText}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import type {
   TimelineTrack,
   TimelineClip,
   TextOverlay,
+  TimelineTransition,
 } from "../../types/timeline.ts";
 
 // ─── Factories ───────────────────────────────────────────────────────────────
@@ -519,7 +520,64 @@ export function validateTimeline(timeline: TimelineDocument): string[] {
     }
   }
 
+  if (Array.isArray(timeline.transitions)) {
+    for (const trans of timeline.transitions) {
+      const prefix = `Transition "${trans.id}"`;
+      if (trans.duration <= 0) {
+        errors.push(`${prefix}: duration (${trans.duration}) must be > 0`);
+      }
+      if (trans.editPoint < 0) {
+        errors.push(`${prefix}: editPoint (${trans.editPoint}) must be >= 0`);
+      }
+      if (!trans.trackId) {
+        errors.push(`${prefix}: trackId must be a non-empty string`);
+      } else if (!timeline.tracks.some((t) => t.id === trans.trackId)) {
+        errors.push(`${prefix}: references non-existent track "${trans.trackId}"`);
+      }
+    }
+  }
+
   return errors;
+}
+
+// ─── Transition Operations ───────────────────────────────────────────────────
+
+export function addTransition(
+  timeline: TimelineDocument,
+  transition: TimelineTransition
+): TimelineDocument {
+  const transitions = timeline.transitions || [];
+  // Remove any existing transition occupying the exact same edit point on the same track
+  const filtered = transitions.filter(
+    (t) => !(t.trackId === transition.trackId && Math.abs(t.editPoint - transition.editPoint) < 0.05)
+  );
+  return {
+    ...timeline,
+    transitions: [...filtered, transition],
+  };
+}
+
+export function removeTransition(
+  timeline: TimelineDocument,
+  transitionId: string
+): TimelineDocument {
+  return {
+    ...timeline,
+    transitions: (timeline.transitions || []).filter((t) => t.id !== transitionId),
+  };
+}
+
+export function updateTransition(
+  timeline: TimelineDocument,
+  transitionId: string,
+  patch: Partial<TimelineTransition>
+): TimelineDocument {
+  return {
+    ...timeline,
+    transitions: (timeline.transitions || []).map((t) =>
+      t.id === transitionId ? { ...t, ...patch } : t
+    ),
+  };
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

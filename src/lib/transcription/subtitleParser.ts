@@ -249,3 +249,27 @@ export function serializeToVtt(cues: TranscriptionCue[]): string {
 
   return `WEBVTT\n\n${body}`;
 }
+
+import type { TextOverlay } from "../../types/timeline.ts";
+
+/**
+ * Serializes timeline TextOverlay objects (e.g. captions) into standard SRT format.
+ */
+export function serializeTextOverlaysToSrt(overlays: TextOverlay[]): string {
+  const cues: TranscriptionCue[] = overlays
+    .filter((o) => o.text && o.text.trim())
+    .sort((a, b) => a.startTime - b.startTime)
+    .map((o) => ({ id: o.id, start: o.startTime, end: o.endTime, text: o.text }));
+  return serializeToSrt(cues);
+}
+
+/**
+ * Serializes timeline TextOverlay objects (e.g. captions) into standard WebVTT format.
+ */
+export function serializeTextOverlaysToVtt(overlays: TextOverlay[]): string {
+  const cues: TranscriptionCue[] = overlays
+    .filter((o) => o.text && o.text.trim())
+    .sort((a, b) => a.startTime - b.startTime)
+    .map((o) => ({ id: o.id, start: o.startTime, end: o.endTime, text: o.text }));
+  return serializeToVtt(cues);
+}

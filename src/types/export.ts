@@ -7,7 +7,7 @@
  * - Float timestamps use integer frame arithmetic to prevent cumulative drift.
  */
 
-import type { TextOverlay } from "./timeline.ts";
+import type { TextOverlay, TimelineDocument } from "./timeline.ts";
 import type { ExportOutputSettings, ProjectExport } from "./project.ts";
 
 export type ExportPreset = "1080p" | "720p" | "540p";
@@ -22,6 +22,11 @@ export interface ExportSettings extends ExportOutputSettings {
   audioSampleRate: number;
   audioChannels: number;
   filename: string;
+  /** Whether to burn enabled caption cues into video frames (defaults to true if caption track is enabled) */
+  includeCaptions?: boolean;
+  /** Whether to also export an SRT/VTT sidecar file */
+  exportSidecarSubtitles?: boolean;
+  sidecarFormat?: "srt" | "vtt";
 }
 
 export interface RenderPlanSource {
@@ -76,6 +81,7 @@ export interface RenderPlan {
   missingSources: string[];
   videoFrames: RenderPlanVideoFrame[];
   audioSegments: RenderPlanAudioSegment[];
+  timeline?: TimelineDocument;
   hasVideo: boolean;
   hasAudio: boolean;
   isValid: boolean;

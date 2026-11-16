@@ -167,7 +167,8 @@ export function createEditPlanFromCandidates(
 export function applyEditPlanToTimeline(
   editPlan: EditPlan,
   baseTimeline?: TimelineDocument,
-  sourceTranscripts?: Map<string, SourceTranscript>
+  sourceTranscripts?: Map<string, SourceTranscript>,
+  options?: { generateCaptions?: boolean }
 ): { timeline: TimelineDocument; errors: string[] } {
   const t = baseTimeline ? { ...baseTimeline } : createTimeline();
 
@@ -255,49 +256,52 @@ export function applyEditPlanToTimeline(
     return tr;
   });
 
-  // Generate timed captions from source transcripts
+  // Generate timed captions from source transcripts only when opted in
+  const shouldGenerateCaptions = options ? options.generateCaptions === true : (sourceTranscripts !== undefined && sourceTranscripts.size > 0);
   const newCaptions: TextOverlay[] = [];
 
-  for (const seg of editPlan.segments) {
-    const transcript = sourceTranscripts?.get(seg.sourceAssetId);
-    if (!transcript || transcript.cues.length === 0) continue;
+  if (shouldGenerateCaptions && sourceTranscripts) {
+    for (const seg of editPlan.segments) {
+      const transcript = sourceTranscripts.get(seg.sourceAssetId);
+      if (!transcript || transcript.cues.length === 0) continue;
 
-    // Filter cues overlapping this segment
-    for (const cue of transcript.cues) {
-      if (cue.end > seg.sourceIn && cue.start < seg.sourceOut) {
-        // Map cue time to timeline time
-        const relativeStart = Math.max(0, cue.start - seg.sourceIn);
-        const relativeEnd = Math.min(seg.duration, cue.end - seg.sourceIn);
+      // Filter cues overlapping this segment
+      for (const cue of transcript.cues) {
+        if (cue.end > seg.sourceIn && cue.start < seg.sourceOut) {
+          // Map cue time to timeline time
+          const relativeStart = Math.max(0, cue.start - seg.sourceIn);
+          const relativeEnd = Math.min(seg.duration, cue.end - seg.sourceIn);
 
-        if (relativeEnd <= relativeStart) continue;
+          if (relativeEnd <= relativeStart) continue;
 
-        const timelineStart = Number((seg.timelineStart + relativeStart).toFixed(2));
-        const timelineEnd = Number((seg.timelineStart + relativeEnd).toFixed(2));
+          const timelineStart = Number((seg.timelineStart + relativeStart).toFixed(2));
+          const timelineEnd = Number((seg.timelineStart + relativeEnd).toFixed(2));
 
-        const overlayId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : `caption-${cue.id}`;
+          const overlayId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `caption-${cue.id}`;
 
-        newCaptions.push({
-          id: overlayId,
-          text: cue.text,
-          startTime: timelineStart,
-          endTime: timelineEnd,
-          x: 0.5,
-          y: editPlan.targetAspectRatio === "9:16" ? 0.78 : 0.82,
-          fontSize: editPlan.targetAspectRatio === "9:16" ? 28 : 24,
-          color: "#ffffff",
-          align: "center",
-          overlayType: "caption",
-          preset: "clean",
-          backgroundColor: "rgba(0, 0, 0, 0.72)",
-          strokeColor: "#000000",
-          strokeWidth: 2,
-          fontWeight: 700,
-          boxWidthRatio: 0.85,
-          sourceAssetId: seg.sourceAssetId,
-          sourceCueId: cue.id,
-        });
+          newCaptions.push({
+            id: overlayId,
+            text: cue.text,
+            startTime: timelineStart,
+            endTime: timelineEnd,
+            x: 0.5,
+            y: editPlan.targetAspectRatio === "9:16" ? 0.78 : 0.82,
+            fontSize: editPlan.targetAspectRatio === "9:16" ? 28 : 24,
+            color: "#ffffff",
+            align: "center",
+            overlayType: "caption",
+            preset: "clean",
+            backgroundColor: "rgba(0, 0, 0, 0.72)",
+            strokeColor: "#000000",
+            strokeWidth: 2,
+            fontWeight: 700,
+            boxWidthRatio: 0.85,
+            sourceAssetId: seg.sourceAssetId,
+            sourceCueId: cue.id,
+          });
+        }
       }
     }
   }

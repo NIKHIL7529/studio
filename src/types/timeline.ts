@@ -13,6 +13,189 @@ import type { ExportAspectRatio } from "./export.ts";
 
 export type TrackType = "video" | "audio" | "title" | "caption";
 
+// ─── Keyframe & Animation Types ──────────────────────────────────────────────
+
+export type KeyframeProperty =
+  | "positionX"
+  | "positionY"
+  | "scaleX"
+  | "scaleY"
+  | "scale"
+  | "rotation"
+  | "opacity"
+  | "volume";
+
+export type KeyframeInterpolation = "linear" | "ease-in" | "ease-out" | "ease-in-out" | "hold";
+
+export interface ClipKeyframe {
+  id: string;
+  property: KeyframeProperty;
+  /** Offset in seconds relative to clip startTime */
+  time: number;
+  value: number;
+  interpolation: KeyframeInterpolation;
+}
+
+export type AnimationCategory = "entrance" | "exit" | "continuous" | "text" | "caption";
+
+export type AnimationPresetId =
+  // Entrance
+  | "fade_in"
+  | "slide_in_left"
+  | "slide_in_right"
+  | "slide_in_top"
+  | "slide_in_bottom"
+  | "push_in_left"
+  | "push_in_right"
+  | "zoom_in"
+  | "zoom_out"
+  | "pop_in"
+  | "rotate_in"
+  | "blur_in"
+  | "soft_bounce_in"
+  // Exit
+  | "fade_out"
+  | "slide_out_left"
+  | "slide_out_right"
+  | "slide_out_top"
+  | "slide_out_bottom"
+  | "zoom_out_exit"
+  | "rotate_out"
+  | "blur_out"
+  | "shrink_out"
+  // Continuous
+  | "slow_pan_left"
+  | "slow_pan_right"
+  | "ken_burns_in"
+  | "ken_burns_out"
+  | "subtle_float"
+  | "shake"
+  | "pulse"
+  // Text specific
+  | "typewriter"
+  | "character_reveal"
+  | "word_reveal"
+  | "line_reveal"
+  | "text_tracking";
+
+export interface ClipAnimationPreset {
+  id: string;
+  presetId: AnimationPresetId;
+  category: AnimationCategory;
+  duration: number; // Duration of entrance/exit in seconds
+  intensity?: number; // e.g. 1.0 = standard
+  seed?: number; // for deterministic shake/continuous
+  customParams?: Record<string, number | string | boolean>;
+}
+
+export interface ClipTransform {
+  x: number; // Offset in px or normalized (-1 to 1, default 0)
+  y: number; // Offset in px or normalized (-1 to 1, default 0)
+  scaleX: number; // multiplier (default 1)
+  scaleY: number; // multiplier (default 1)
+  rotation: number; // degrees (-360 to 360, default 0)
+  opacity: number; // 0 to 1 (default 1)
+}
+
+// ─── Transition Types ────────────────────────────────────────────────────────
+
+export type TransitionFamily =
+  | "dissolve"
+  | "wipe"
+  | "movement"
+  | "stylized"
+  | "audio";
+
+export type TransitionType =
+  // Dissolves & Fades
+  | "cross_dissolve"
+  | "fade_from_black"
+  | "fade_to_black"
+  | "dip_black"
+  | "fade_from_white"
+  | "fade_to_white"
+  | "dip_color"
+  | "additive_dissolve"
+  // Directional Wipes
+  | "wipe_left"
+  | "wipe_right"
+  | "wipe_up"
+  | "wipe_down"
+  | "wipe_diagonal_tl_br"
+  | "wipe_diagonal_tr_bl"
+  | "wipe_center_out"
+  | "wipe_edge_in"
+  | "barn_door_horizontal"
+  | "barn_door_vertical"
+  | "clock_wipe"
+  | "iris_open"
+  | "iris_close"
+  | "shape_mask_circle"
+  | "shape_mask_diamond"
+  | "shape_mask_box"
+  | "luma_wipe"
+  // Movement
+  | "push_left"
+  | "push_right"
+  | "push_up"
+  | "push_down"
+  | "slide_left"
+  | "slide_right"
+  | "slide_up"
+  | "slide_down"
+  | "cover_left"
+  | "cover_right"
+  | "reveal_left"
+  | "reveal_right"
+  | "split_push"
+  | "split_slide"
+  | "zoom_in"
+  | "zoom_out"
+  | "directional_zoom"
+  // Stylized & Blur
+  | "blur_dissolve"
+  | "zoom_blur"
+  | "defocus"
+  | "flash_white"
+  | "flash_color"
+  | "glitch"
+  | "pixelate"
+  // Audio
+  | "audio_linear_fade_in"
+  | "audio_linear_fade_out"
+  | "audio_equal_power_fade_in"
+  | "audio_equal_power_fade_out"
+  | "audio_linear_crossfade"
+  | "audio_equal_power_crossfade"
+  | "audio_dip_silence";
+
+export interface TransitionParams {
+  color?: string; // hex color for dip_color, flash_color
+  softness?: number; // feather edge 0 to 1
+  borderWidth?: number;
+  borderColor?: string;
+  seed?: number; // deterministic seed for glitch
+  intensity?: number;
+  easing?: "linear" | "ease-in" | "ease-out" | "ease-in-out";
+}
+
+export interface TimelineTransition {
+  id: string;
+  type: TransitionType;
+  family: TransitionFamily;
+  duration: number; // in seconds (e.g. 0.5s)
+  /** Timeline time of the edit point between fromClip and toClip */
+  editPoint: number;
+  /** Incoming clip ID (if transition connects two clips or starts at clip end) */
+  fromClipId?: string;
+  /** Outgoing clip ID (if transition connects two clips or starts at clip start) */
+  toClipId?: string;
+  /** Associated track ID */
+  trackId: string;
+  alignment: "center" | "start" | "end";
+  params?: TransitionParams;
+}
+
 export interface TimelineClip {
   /** Stable UUID */
   id: string;
@@ -35,6 +218,14 @@ export interface TimelineClip {
   linkedClipId?: string;
   /** Playback speed factor (1.0 = normal, 0.5 = 2x slow motion, 2.0 = 2x fast) */
   speed?: number;
+  /** Keyframe automation for position, scale, opacity, volume, etc. */
+  keyframes?: ClipKeyframe[];
+  /** Animation preset (entrance, exit, continuous) */
+  animationPreset?: ClipAnimationPreset;
+  /** Static transform properties */
+  transform?: ClipTransform;
+  /** If audio was detached, whether this clip's embedded audio is disabled */
+  embeddedAudioDisabled?: boolean;
 }
 
 export type TextOverlayType = "title" | "caption";
@@ -60,6 +251,14 @@ export interface TextOverlay {
   /** CSS color string */
   color: string;
   align: "left" | "center" | "right";
+  /** Font family (e.g. "sans-serif", "Inter", "Impact", "Georgia", etc.) */
+  fontFamily?: string;
+  /** Rotation in degrees */
+  rotation?: number;
+  /** Letter spacing in px */
+  letterSpacing?: number;
+  /** Line height multiplier (default 1.35) */
+  lineHeight?: number;
 
   // ── Caption & Spoken Word Styling ──────────────────────────────
   /** Distinct overlay role: "title" headline vs timed "caption" */
@@ -68,18 +267,29 @@ export interface TextOverlay {
   preset?: CaptionPreset;
   /** Background pill/box color (e.g. "rgba(0,0,0,0.75)" or "#000000") */
   backgroundColor?: string;
+  /** Corner radius for background pill in px */
+  backgroundCornerRadius?: number;
+  /** Padding for background pill in px */
+  backgroundPadding?: number;
   /** Outline stroke color for high contrast text */
   strokeColor?: string;
   /** Outline stroke width in px */
   strokeWidth?: number;
+  /** Text shadow styling */
+  shadowColor?: string;
+  shadowBlur?: number;
   /** Font weight: e.g. 600, 700, 800 */
   fontWeight?: string | number;
   /** Safe margin wrapping width as fraction of canvas width (e.g. 0.85) */
   boxWidthRatio?: number;
+  /** Animation preset for title or caption */
+  animationPreset?: AnimationPresetId;
   /** Reference to originating source asset */
   sourceAssetId?: string;
   /** Reference to originating subtitle cue */
   sourceCueId?: string;
+  /** Word-level timing tokens if available */
+  wordTimings?: Array<{ word: string; start: number; end: number }>;
 }
 
 export interface TimelineTrack {
@@ -122,6 +332,12 @@ export interface TimelineMarker {
 
 export interface TimelineSettings {
   targetAspectRatio?: ExportAspectRatio;
+  /** Whether captions should be included by default in exports */
+  includeCaptionsInExport?: boolean;
+  /** Caption track enabled / visible in preview */
+  captionsVisible?: boolean;
+  /** Default font family for titles/captions */
+  defaultFontFamily?: string;
 }
 
 export interface TimelineDocument {
@@ -129,6 +345,8 @@ export interface TimelineDocument {
   tracks: TimelineTrack[];
   textOverlays: TextOverlay[];
   settings: TimelineSettings;
+  /** Transitions applied between clips or at clip edges */
+  transitions?: TimelineTransition[];
   /** Optional timeline markers */
   markers?: TimelineMarker[];
   /** In-point for sequence export or playback boundary (seconds) */

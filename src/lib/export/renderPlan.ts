@@ -315,6 +315,7 @@ export function buildRenderPlan(
     missingSources,
     videoFrames,
     audioSegments,
+    timeline: timelineSnapshot,
     hasVideo,
     hasAudio,
     isValid,

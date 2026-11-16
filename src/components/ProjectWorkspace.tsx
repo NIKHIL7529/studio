@@ -33,7 +33,12 @@ import {
 import { formatBytes, sanitizeProjectName } from "../lib/projectValidation.ts";
 import { MediaInspectionQueue } from "../lib/media/inspectionQueue.ts";
 import { formatDuration } from "../lib/media/inspector.ts";
-import { createTimeline, addTextOverlay, getTimelineDuration } from "../lib/timeline/model.ts";
+import {
+  createTimeline,
+  addTextOverlay,
+  getTimelineDuration,
+  resolveTextOverlayCollisions,
+} from "../lib/timeline/model.ts";
 import { TimelineUndoStack } from "../lib/timeline/undoRedo.ts";
 import { SourceMonitor } from "./editor/SourceMonitor.tsx";
 import { SequenceSelector } from "./editor/SequenceSelector.tsx";
@@ -48,6 +53,7 @@ import {
   updateActiveSequenceTimeline,
 } from "../lib/timeline/sequenceManager.ts";
 import { insertEdit, overwriteEdit } from "../lib/timeline/editingOperations.ts";
+import { generateCaptionsForTimeline } from "../lib/transcription/captionGenerator.ts";
 import { MediaPreviewPlayer } from "./MediaPreviewPlayer.tsx";
 import { TimelineEditor } from "./editor/TimelineEditor.tsx";
 import { TimelinePreview } from "./editor/TimelinePreview.tsx";
@@ -140,7 +146,9 @@ export function ProjectWorkspace({
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -149,6 +157,7 @@ export function ProjectWorkspace({
     if (clipId) {
       setSelectedOverlayId(null);
       setSelectedTrackId(null);
+      setSelectedTransitionId(null);
     }
   }, []);
 
@@ -157,6 +166,7 @@ export function ProjectWorkspace({
     if (overlayId) {
       setSelectedClipId(null);
       setSelectedTrackId(null);
+      setSelectedTransitionId(null);
     }
   }, []);
 
@@ -165,6 +175,16 @@ export function ProjectWorkspace({
     if (trackId) {
       setSelectedClipId(null);
       setSelectedOverlayId(null);
+      setSelectedTransitionId(null);
+    }
+  }, []);
+
+  const handleSelectTransition = useCallback((transId: string | null) => {
+    setSelectedTransitionId(transId);
+    if (transId) {
+      setSelectedClipId(null);
+      setSelectedOverlayId(null);
+      setSelectedTrackId(null);
     }
   }, []);
 
@@ -251,6 +271,27 @@ export function ProjectWorkspace({
       updateProject(withSeq as ProjectDocumentWithTimeline);
     }
   }, [undoStack, updateProject]);
+
+  const handleGenerateCaptions = useCallback(async () => {
+    if (isGeneratingCaptions) return;
+    setIsGeneratingCaptions(true);
+    try {
+      const newCaptions = await generateCaptionsForTimeline(timeline, liveAssets, {
+        modelName: "whisper-tiny_timestamped",
+      });
+      const nonCaptions = timeline.textOverlays.filter((o) => o.overlayType !== "caption");
+      const allOverlays = resolveTextOverlayCollisions([...nonCaptions, ...newCaptions]);
+      handleTimelineChange({
+        ...timeline,
+        textOverlays: allOverlays,
+      });
+    } catch (err) {
+      console.warn("Caption generation failed:", err);
+      alert("Caption generation failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsGeneratingCaptions(false);
+    }
+  }, [isGeneratingCaptions, timeline, liveAssets, handleTimelineChange]);
 
   // ─── Sequence Management ─────────────────────────────────────────────────
 
@@ -899,6 +940,7 @@ export function ProjectWorkspace({
           isPlaying={isPlaying}
           selectedClipId={selectedClipId}
           selectedOverlayId={selectedOverlayId}
+          selectedTransitionId={selectedTransitionId}
           selectedTrackId={selectedTrackId}
           sourceAssetId={sourceAssetId}
           canUndo={canUndo}
@@ -915,6 +957,7 @@ export function ProjectWorkspace({
           onPlaybackTimeUpdate={handlePlaybackTimeUpdate}
           onSelectClip={handleSelectClip}
           onSelectOverlay={handleSelectOverlay}
+          onSelectTransition={handleSelectTransition}
           onSelectTrack={handleSelectTrack}
           onSelectSourceAsset={setSourceAssetId}
           onInsertEdit={handleInsertEdit}
@@ -927,6 +970,8 @@ export function ProjectWorkspace({
           onUndo={handleUndo}
           onRedo={handleRedo}
           onAddTextOverlay={handleAddTextOverlay}
+          onGenerateCaptions={handleGenerateCaptions}
+          isGeneratingCaptions={isGeneratingCaptions}
         />
       )}
 
@@ -1185,6 +1230,7 @@ function EditorMode({
   isPlaying,
   selectedClipId,
   selectedOverlayId,
+  selectedTransitionId,
   selectedTrackId,
   sourceAssetId,
   canUndo,
@@ -1201,6 +1247,7 @@ function EditorMode({
   onPlaybackTimeUpdate,
   onSelectClip,
   onSelectOverlay,
+  onSelectTransition,
   onSelectTrack,
   onSelectSourceAsset,
   onInsertEdit,
@@ -1213,6 +1260,8 @@ function EditorMode({
   onUndo,
   onRedo,
   onAddTextOverlay,
+  onGenerateCaptions,
+  isGeneratingCaptions,
 }: {
   doc: ProjectDocumentWithTimeline;
   liveAssets: Map<string, LiveAssetItem>;
@@ -1221,6 +1270,7 @@ function EditorMode({
   isPlaying: boolean;
   selectedClipId: string | null;
   selectedOverlayId: string | null;
+  selectedTransitionId?: string | null;
   selectedTrackId?: string | null;
   sourceAssetId: string | null;
   canUndo: boolean;
@@ -1237,6 +1287,7 @@ function EditorMode({
   onPlaybackTimeUpdate: (time: number) => void;
   onSelectClip: (id: string | null) => void;
   onSelectOverlay: (id: string | null) => void;
+  onSelectTransition?: (id: string | null) => void;
   onSelectTrack?: (id: string | null) => void;
   onSelectSourceAsset: (id: string) => void;
   onInsertEdit: (assetId: string, sIn: number, sOut: number, targetTrackId: string) => void;
@@ -1249,6 +1300,8 @@ function EditorMode({
   onUndo: () => void;
   onRedo: () => void;
   onAddTextOverlay: (overlay: TextOverlay) => void;
+  onGenerateCaptions?: () => void;
+  isGeneratingCaptions?: boolean;
 }) {
   const [layoutPrefs, setLayoutPrefs] = useState<WorkspaceLayoutPrefs>(() => {
     if (typeof window === "undefined") return DEFAULT_LAYOUT;
@@ -1508,12 +1561,16 @@ function EditorMode({
               timeline={timeline}
               selectedClipId={selectedClipId}
               selectedOverlayId={selectedOverlayId}
+              selectedTransitionId={selectedTransitionId}
               selectedTrackId={selectedTrackId}
               liveAssets={liveAssets}
               currentTime={currentTime}
               onTimelineChange={onTimelineChange}
               onAddTextOverlay={onAddTextOverlay}
               onSelectTrack={onSelectTrack}
+              onSelectTransition={onSelectTransition}
+              onGenerateCaptions={onGenerateCaptions}
+              isGeneratingCaptions={isGeneratingCaptions}
             />
           </div>
         ) : (
@@ -1552,9 +1609,11 @@ function EditorMode({
           onPlayPause={onPlayPause}
           selectedClipId={selectedClipId}
           selectedOverlayId={selectedOverlayId}
+          selectedTransitionId={selectedTransitionId}
           selectedTrackId={selectedTrackId}
           onSelectClip={onSelectClip}
           onSelectOverlay={onSelectOverlay}
+          onSelectTransition={onSelectTransition}
           onSelectTrack={onSelectTrack}
           canUndo={canUndo}
           canRedo={canRedo}
