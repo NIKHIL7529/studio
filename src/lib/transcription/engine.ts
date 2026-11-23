@@ -22,8 +22,8 @@ export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = [
   {
     modelName: "whisper-tiny_timestamped",
     label: "Whisper Tiny (Word-Level Timestamps)",
-    sizeBytes: 39 * 1024 * 1024,
-    sizeFormatted: "~39 MB",
+    sizeBytes: 120 * 1024 * 1024,
+    sizeFormatted: "~120 MB",
     isDownloaded: false,
     supportsWordTimestamps: true,
     description: "Lightweight, fastest model with precise word-level cut boundaries.",
@@ -31,8 +31,8 @@ export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = [
   {
     modelName: "whisper-base_timestamped",
     label: "Whisper Base (Word-Level Timestamps)",
-    sizeBytes: 74 * 1024 * 1024,
-    sizeFormatted: "~74 MB",
+    sizeBytes: 206 * 1024 * 1024,
+    sizeFormatted: "~206 MB",
     isDownloaded: false,
     supportsWordTimestamps: true,
     description: "Higher accuracy with word-level timestamps for complex speech.",
@@ -40,8 +40,8 @@ export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = [
   {
     modelName: "whisper-tiny",
     label: "Whisper Tiny (Segment Timestamps)",
-    sizeBytes: 39 * 1024 * 1024,
-    sizeFormatted: "~39 MB",
+    sizeBytes: 120 * 1024 * 1024,
+    sizeFormatted: "~120 MB",
     isDownloaded: false,
     supportsWordTimestamps: false,
     description: "Fastest segment-level transcription for low-memory devices.",
@@ -49,8 +49,8 @@ export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = [
   {
     modelName: "whisper-base",
     label: "Whisper Base (Segment Timestamps)",
-    sizeBytes: 74 * 1024 * 1024,
-    sizeFormatted: "~74 MB",
+    sizeBytes: 206 * 1024 * 1024,
+    sizeFormatted: "~206 MB",
     isDownloaded: false,
     supportsWordTimestamps: false,
     description: "Balanced general-purpose transcription with sentence cues.",

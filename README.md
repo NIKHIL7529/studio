@@ -130,7 +130,7 @@ When you select a local workspace directory, Content Studio operates strictly wi
 2. **Project data:** `project.json` is the sole durable source of truth for your edits, tracks, clips, overlays, and export history.
 3. **Reversible trash:** Moving a project to trash moves `projects/<id>` into `trash/<id>`. Trashed projects can be inspected and restored to active projects at any time.
 4. **Conservative cache cleanup:** The built-in Cache Manager catalogs only application-generated derived files (`.tmp_*`, thumbnails, waveforms, candidate cache) within the workspace directory. Durable project documents, completed exports, and original media are strictly protected.
-5. **Whisper Model Storage Boundary:** Offline Whisper models (39 MB to 74 MB) downloaded via `browser-whisper` and `@huggingface/transformers` are stored in browser-managed origin storage (OPFS / CacheStorage), outside the local workspace folder. Although `LocalTranscriptionEngine.deleteModel()` provides an programmatic deletion method, model purging is currently managed separately from the workspace-based Cache Manager modal.
+5. **Whisper Model Storage Boundary:** Offline Whisper models (~120 MB for Whisper Tiny, ~206 MB for Whisper Base) downloaded via `browser-whisper` and `@huggingface/transformers` are stored in browser-managed origin storage (OPFS / CacheStorage). Users can view and manage speech models directly inside the Cache Manager dialog (`CacheManagerModal.tsx`) under the dedicated **"Speech Models — Browser Storage"** section, which provides manual per-model deletion and a global cache clear. Models are never deleted automatically.
 
 ---
 

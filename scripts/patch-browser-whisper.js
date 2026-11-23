@@ -4,6 +4,8 @@
  * Prevents unhandled "TypeError: Cannot read properties of undefined (reading 'destroy')"
  * when wgpuBufferRelease (db) or wgpuDeviceRelease (yb) is called for uninitialized
  * or already-released WebGPU handles.
+ *
+ * Strict validation: Throws an error if any expected code pattern stops matching.
  */
 
 import fs from "node:fs";
@@ -19,41 +21,48 @@ if (!fs.existsSync(targetFile)) {
 }
 
 let code = fs.readFileSync(targetFile, "utf8");
-let patched = false;
 
-// 1. Guard f.destroy() in db(u)
-if (code.includes("f.destroy();\n  }\n  function hb")) {
-  code = code.replace(
-    "f.destroy();\n  }\n  function hb",
-    "(f && typeof f.destroy === 'function' && f.destroy());\n  }\n  function hb"
-  );
-  patched = true;
-  console.log("[patch-browser-whisper] Patched f.destroy() in db(u)");
+const patterns = [
+  {
+    name: "f.destroy() in db(u)",
+    unpatched: "f.destroy();\n  }\n  function hb",
+    patched: "(f && typeof f.destroy === 'function' && f.destroy());\n  }\n  function hb",
+  },
+  {
+    name: "u.destroy() in yb(u)",
+    unpatched: "(u = K(u)).onuncapturederror = null, u.destroy();",
+    patched: "(u = K(u)) && (u.onuncapturederror = null, typeof u.destroy === 'function' && u.destroy());",
+  },
+  {
+    name: "f.unmap() in pb(u)",
+    unpatched: "delete cr[u], f.unmap();",
+    patched: "delete cr[u], (f && typeof f.unmap === 'function' && f.unmap());",
+  },
+];
+
+let modified = false;
+
+for (const pattern of patterns) {
+  if (code.includes(pattern.patched)) {
+    // Already patched in previous run
+    continue;
+  }
+
+  if (code.includes(pattern.unpatched)) {
+    code = code.replace(pattern.unpatched, pattern.patched);
+    modified = true;
+    console.log(`[patch-browser-whisper] Patched ${pattern.name}`);
+  } else {
+    throw new Error(
+      `[patch-browser-whisper] Expected code pattern for "${pattern.name}" did not match in ${targetFile}. ` +
+      `Ensure browser-whisper is pinned to exact version 2.0.0.`
+    );
+  }
 }
 
-// 2. Guard u.destroy() in yb(u)
-if (code.includes("(u = K(u)).onuncapturederror = null, u.destroy();")) {
-  code = code.replace(
-    "(u = K(u)).onuncapturederror = null, u.destroy();",
-    "(u = K(u)) && (u.onuncapturederror = null, typeof u.destroy === 'function' && u.destroy());"
-  );
-  patched = true;
-  console.log("[patch-browser-whisper] Patched u.destroy() in yb(u)");
-}
-
-// 3. Guard f.unmap() in pb(u)
-if (code.includes("delete cr[u], f.unmap();")) {
-  code = code.replace(
-    "delete cr[u], f.unmap();",
-    "delete cr[u], (f && typeof f.unmap === 'function' && f.unmap());"
-  );
-  patched = true;
-  console.log("[patch-browser-whisper] Patched f.unmap() in pb(u)");
-}
-
-if (patched) {
+if (modified) {
   fs.writeFileSync(targetFile, code, "utf8");
   console.log("[patch-browser-whisper] Successfully patched browser-whisper.");
 } else {
-  console.log("[patch-browser-whisper] browser-whisper is already patched or patterns did not match.");
+  console.log("[patch-browser-whisper] browser-whisper is already up-to-date and patched.");
 }

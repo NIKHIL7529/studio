@@ -72,7 +72,7 @@ Content Studio implements a professional two-up monitor architecture:
 
 ### 3.6 Local Speech-to-Text & Subtitles (`src/lib/transcription/`)
 - **Offline Whisper Engine (`engine.ts`):** Client-side speech-to-text using `browser-whisper` with WebGPU hardware acceleration and automatic CPU WebAssembly fallback.
-- **Model Tiers:** Supports Whisper Tiny (~39 MB) and Whisper Base (~74 MB) with word-level timestamp support (`whisper-tiny_timestamped`) and segment-level variants.
+- **Model Tiers:** Supports Whisper Tiny (~120 MB) and Whisper Base (~206 MB) with word-level timestamp support (`whisper-tiny_timestamped`) and segment-level variants.
 - **Subtitle Parsing (`subtitleParser.ts`):** Parses user-provided SRT and WebVTT files into structured timestamped cues.
 - **Automated Caption Generation (`captionGenerator.ts`):** Converts speech cues into styled short-form text overlays with line-wrapping, bounding boxes, and karaoke word tracking.
 
@@ -115,7 +115,7 @@ Content Studio implements a professional two-up monitor architecture:
 
 ### 4.2 Storage Boundaries & Whisper Model Cache
 - **Workspace-Managed Storage:** `projects/<id>/cache/`, `.tmp_*` files, and `trash/` are managed by `cacheManager.ts` and `trash.ts`. Active resource locks prevent cleanup during ongoing exports or playback.
-- **Browser-Managed Origin Storage:** Model weights downloaded for local Whisper speech recognition are stored in browser OPFS / CacheStorage by `browser-whisper` and `@huggingface/transformers`. They reside in origin storage outside the workspace folder and are currently purged via `LocalTranscriptionEngine.deleteModel()`.
+- **Browser-Managed Origin Storage:** Model weights downloaded for local Whisper speech recognition are stored in browser OPFS / CacheStorage by `browser-whisper` and `@huggingface/transformers`. They reside in origin storage outside the workspace folder and are managed via the dedicated "Speech Models — Browser Storage" section in `CacheManagerModal.tsx` through manual deletion controls (`BrowserWhisper.deleteModel()` and `BrowserWhisper.clearCache()`). Models are never deleted automatically.
 
 ---
 
@@ -175,4 +175,4 @@ Content Studio implements a professional two-up monitor architecture:
 | **Phase 6: Local Speech-to-Text & Subtitles** | ✅ Completed | Offline Whisper WebGPU/WASM, SRT/VTT parser, word-level caption generator. |
 | **Phase 7: Content-Aware Repurposing** | ✅ Completed | 100% source duration coverage, acoustic/visual dynamics, 5 context-integrity metrics, EditPlan. |
 | **Phase 8: Progressive Export & Validation** | ✅ Completed | Staged progressive disk writing, WebCodecs MP4/WebM encoding, post-render container validation. |
-| **Phase 9: Future Architectural Enhancements** | 📋 Planned | Offload export compositing to dedicated Web Workers, integrate Whisper model purging into CacheManagerModal, add Playwright browser test harness. |
+| **Phase 9: Future Architectural Enhancements** | 📋 Planned | Offload export compositing to dedicated Web Workers, configure COOP/COEP headers for multi-threaded WASM, add Playwright browser test harness. |
