@@ -13,10 +13,11 @@ import type { TimelineDocument, TextOverlay } from "../../types/timeline.ts";
 import type { LiveAssetItem } from "../../types/project.ts";
 import { renderTimelineAudioToWav } from "./sequenceAudio.ts";
 import { LocalTranscriptionEngine } from "./engine.ts";
+import type { SpeechModelId } from "./modelStorage.ts";
 import { resolveTextOverlayCollisions } from "../timeline/model.ts";
 
 export interface CaptionGenerationOptions {
-  modelName?: "whisper-tiny_timestamped" | "whisper-base_timestamped" | "whisper-tiny" | "whisper-base";
+  modelName?: SpeechModelId | string;
   language?: string;
   preset?: "clean" | "bold" | "minimal";
   signal?: AbortSignal;
@@ -83,6 +84,8 @@ export async function generateCaptionsForTimeline(
       fontSize,
       color: "#ffffff",
       align: "center",
+      presetId: "bold-karaoke",
+      activeWordColor: "#facc15",
       overlayType: "caption",
       preset,
       backgroundColor: preset === "minimal" ? undefined : "rgba(0, 0, 0, 0.78)",
@@ -99,4 +102,46 @@ export async function generateCaptionsForTimeline(
   });
 
   return resolveTextOverlayCollisions(newCaptions);
+}
+
+export type CaptionStylePatch = Partial<
+  Pick<
+    TextOverlay,
+    | "fontSize"
+    | "color"
+    | "fontFamily"
+    | "align"
+    | "presetId"
+    | "activeWordColor"
+    | "preset"
+    | "backgroundColor"
+    | "strokeColor"
+    | "strokeWidth"
+    | "fontWeight"
+    | "boxWidthRatio"
+    | "x"
+    | "y"
+  >
+>;
+
+/**
+ * Applies a visual style patch to all caption text overlays on the timeline.
+ * Preserves cue texts, timing intervals, word-level timestamps, and non-caption overlays.
+ */
+export function applyCaptionStyleToAll(
+  timeline: TimelineDocument,
+  stylePatch: CaptionStylePatch
+): TimelineDocument {
+  return {
+    ...timeline,
+    textOverlays: timeline.textOverlays.map((overlay) => {
+      if (overlay.overlayType === "caption") {
+        return {
+          ...overlay,
+          ...stylePatch,
+        };
+      }
+      return overlay;
+    }),
+  };
 }

@@ -7,7 +7,7 @@
  * - Float timestamps use integer frame arithmetic to prevent cumulative drift.
  */
 
-import type { TextOverlay, TimelineDocument } from "./timeline.ts";
+import type { TextOverlay, TimelineDocument, TrackAudioRole, TrackDuckingConfig } from "./timeline.ts";
 import type { ExportOutputSettings, ProjectExport } from "./project.ts";
 
 export type ExportPreset = "1080p" | "720p" | "540p";
@@ -63,9 +63,15 @@ export interface RenderPlanAudioSegment {
   timelineEndSeconds: number;
   sourceInSeconds: number;
   sourceOutSeconds: number;
+  playbackRate: number;
+  preservePitch: boolean;
   volume: number;
   trackId: string;
   trackOrder: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  audioRole?: TrackAudioRole;
+  ducking?: TrackDuckingConfig;
 }
 
 export interface RenderPlan {

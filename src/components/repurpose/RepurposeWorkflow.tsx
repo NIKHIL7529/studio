@@ -33,6 +33,12 @@ import { generateCaptionsForTimeline } from "../../lib/transcription/captionGene
 import { parseSubtitleFileContent } from "../../lib/transcription/subtitleParser.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { formatBytes } from "../../lib/projectValidation.ts";
+import {
+  SPEECH_MODEL_CATALOG,
+  getDefaultModelId,
+  type SpeechModelId,
+} from "../../lib/transcription/modelStorage.ts";
+import { detectCapabilities } from "../../lib/capabilities.ts";
 import { CandidateCard } from "./CandidateCard.tsx";
 import { CandidatePreviewPlayer } from "./CandidatePreviewPlayer.tsx";
 import {
@@ -93,9 +99,14 @@ export function RepurposeWorkflow({
   const [generateCaptionsForSequence, setGenerateCaptionsForSequence] = useState(false);
   const [isGeneratingCaptions, setIsGeneratingCaptions] = useState(false);
   const [captionProgressText, setCaptionProgressText] = useState("");
-  const [selectedModelName, setSelectedModelName] = useState<"whisper-tiny_timestamped" | "whisper-base_timestamped">(
-    "whisper-tiny_timestamped"
-  );
+  const [hasWebGpu] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return detectCapabilities().webGpu.available;
+  });
+  const [selectedModelName, setSelectedModelName] = useState<SpeechModelId>(() => {
+    if (typeof window === "undefined") return "whisper-tiny_timestamped";
+    return getDefaultModelId(detectCapabilities().webGpu.available);
+  });
 
   // Pipeline Execution State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -712,11 +723,17 @@ export function RepurposeWorkflow({
                             <span className="text-cs-text-tertiary">Local Model:</span>
                             <select
                               value={selectedModelName}
-                              onChange={(e) => setSelectedModelName(e.target.value as any)}
+                              onChange={(e) => setSelectedModelName(e.target.value as SpeechModelId)}
                               className="bg-cs-bg-elevated border border-cs-border-default rounded px-2 py-1 text-xs text-cs-text-primary font-medium"
                             >
-                              <option value="whisper-tiny_timestamped">Whisper Tiny (~39 MB, Word Timings)</option>
-                              <option value="whisper-base_timestamped">Whisper Base (~74 MB, Word Timings)</option>
+                              {SPEECH_MODEL_CATALOG.map((m) => {
+                                const disabled = m.requiresWebGpu && !hasWebGpu;
+                                return (
+                                  <option key={m.id} value={m.id} disabled={disabled}>
+                                    {m.label} ({m.estimatedSizeFormatted}, {m.languages}){disabled ? " — Requires WebGPU" : ""}
+                                  </option>
+                                );
+                              })}
                             </select>
                           </div>
                           <div className="flex items-center gap-1.5 text-[10px] text-cs-text-tertiary">
@@ -914,28 +931,70 @@ export function RepurposeWorkflow({
                     local Whisper transcribes spoken dialogue to discover speech and thought boundaries.
                   </p>
                   {enableTranscription && (
-                    <div className="flex items-center gap-4 mt-1 text-xs">
-                      <span className="text-cs-text-tertiary">Model:</span>
-                      <label className="flex items-center gap-1.5 cursor-pointer text-cs-text-secondary">
-                        <input
-                          type="radio"
-                          name="whisper-model"
-                          value="whisper-tiny_timestamped"
-                          checked={selectedModelName === "whisper-tiny_timestamped"}
-                          onChange={() => setSelectedModelName("whisper-tiny_timestamped")}
-                        />
-                        <span>Tiny (~39MB, Fast)</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer text-cs-text-secondary">
-                        <input
-                          type="radio"
-                          name="whisper-model"
-                          value="whisper-base_timestamped"
-                          checked={selectedModelName === "whisper-base_timestamped"}
-                          onChange={() => setSelectedModelName("whisper-base_timestamped")}
-                        />
-                        <span>Base (~73MB, Accurate)</span>
-                      </label>
+                    <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-cs-border-subtle">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-cs-text-primary">Speech Model Tier:</span>
+                        <span className="text-[10px] text-cs-text-tertiary">
+                          {hasWebGpu ? "WebGPU Detected" : "CPU/WASM Fallback"}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {SPEECH_MODEL_CATALOG.map((m) => {
+                          const disabled = m.requiresWebGpu && !hasWebGpu;
+                          const isSelected = selectedModelName === m.id;
+
+                          return (
+                            <label
+                              key={m.id}
+                              title={disabled ? "Requires WebGPU" : m.description}
+                              className={`p-2.5 rounded-lg border text-xs flex flex-col justify-between transition-colors ${
+                                disabled
+                                  ? "opacity-50 cursor-not-allowed bg-cs-bg-muted border-cs-border-subtle"
+                                  : isSelected
+                                  ? "bg-cs-primary/10 border-cs-primary text-cs-text-primary cursor-pointer"
+                                  : "bg-cs-bg-base border-cs-border-default hover:border-cs-border-strong cursor-pointer"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-1">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="radio"
+                                    name="whisper-model"
+                                    value={m.id}
+                                    checked={isSelected}
+                                    disabled={disabled}
+                                    onChange={() => !disabled && setSelectedModelName(m.id)}
+                                    className="mt-0.5"
+                                  />
+                                  <div>
+                                    <span className="font-semibold text-xs block text-cs-text-primary">
+                                      {m.label}
+                                    </span>
+                                    <span className="text-[11px] text-cs-text-secondary block">
+                                      {m.estimatedSizeFormatted} • {m.languages}
+                                    </span>
+                                  </div>
+                                </div>
+                                <Badge variant={m.tier === "pro" ? "warning" : m.tier === "balanced" ? "info" : "muted"}>
+                                  {m.tier}
+                                </Badge>
+                              </div>
+
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+                                {m.recommendedBadge && (
+                                  <Badge variant="default">{m.recommendedBadge}</Badge>
+                                )}
+                                {disabled && (
+                                  <Badge variant="warning">Requires WebGPU</Badge>
+                                )}
+                                <span className="text-cs-text-tertiary truncate">
+                                  {m.hardwareRequirement}
+                                </span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>

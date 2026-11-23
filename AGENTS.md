@@ -72,7 +72,7 @@ Content Studio implements a professional two-up monitor architecture:
 
 ### 3.6 Local Speech-to-Text & Subtitles (`src/lib/transcription/`)
 - **Offline Whisper Engine (`engine.ts`):** Client-side speech-to-text using `browser-whisper` with WebGPU hardware acceleration and automatic CPU WebAssembly fallback.
-- **Model Tiers:** Supports Whisper Tiny (~120 MB) and Whisper Base (~206 MB) with word-level timestamp support (`whisper-tiny_timestamped`) and segment-level variants.
+- **5-Tier Model Catalog:** Structured 5-tier catalog with hardware compatibility gating: `lite` (`whisper-tiny_timestamped`, ~120 MB, CPU/WebGPU), `fast-en` (`moonshine-base`, ~98 MB, fast on CPU), `balanced` (`whisper-base_timestamped`, ~206 MB, CPU/WebGPU recommended), `high` (`whisper-small_timestamped`, ~461 MB, WebGPU recommended), and `pro` (`whisper-large-v3-turbo_timestamped`, ~809 MB, requires dedicated WebGPU).
 - **Subtitle Parsing (`subtitleParser.ts`):** Parses user-provided SRT and WebVTT files into structured timestamped cues.
 - **Automated Caption Generation (`captionGenerator.ts`):** Converts speech cues into styled short-form text overlays with line-wrapping, bounding boxes, and karaoke word tracking.
 
@@ -153,7 +153,7 @@ Content Studio implements a professional two-up monitor architecture:
 
 ## 8. Testing Strategy
 
-- **Architectural & Unit Test Suites:** 42 test suites in `test/*.test.ts` run via Node's native runner:
+- **Architectural & Unit Test Suites:** 45 test files (77 test suites / 356 tests) in `test/*.test.ts` run via Node's native runner:
   ```bash
   npm test
   # Invokes: node --experimental-strip-types --test test/*.test.ts
@@ -175,4 +175,6 @@ Content Studio implements a professional two-up monitor architecture:
 | **Phase 6: Local Speech-to-Text & Subtitles** | ✅ Completed | Offline Whisper WebGPU/WASM, SRT/VTT parser, word-level caption generator. |
 | **Phase 7: Content-Aware Repurposing** | ✅ Completed | 100% source duration coverage, acoustic/visual dynamics, 5 context-integrity metrics, EditPlan. |
 | **Phase 8: Progressive Export & Validation** | ✅ Completed | Staged progressive disk writing, WebCodecs MP4/WebM encoding, post-render container validation. |
-| **Phase 9: Future Architectural Enhancements** | 📋 Planned | Offload export compositing to dedicated Web Workers, configure COOP/COEP headers for multi-threaded WASM, add Playwright browser test harness. |
+| **Phase 9: Professional NLE Workspace & Direct Canvas** | ✅ Completed | Resizable layout (`react-resizable-panels`), direct Program canvas manipulation (bounding box, corner scale & rotation handles, center snap guides, 9:16 safe margins, inline text editing), 5-tier local ASR catalog (`lite`, `fast-en`, `balanced`, `high`, `pro`) with WebGPU hardware gating, audio fade ramps & handles, caption trimming, and Radix context menu & inspector controls. |
+| **Phase 10: Color Adjustments & Deterministic Audio Ducking** | ✅ Completed | 6 color presets (`none`, `vivid`, `warm`, `cool`, `bw`, `cinematic`), Canvas 2D filter generation, temperature tint overlay, track audio roles (`dialogue`, `music`, `sfx`, `general`), deterministic dialogue interval harvesting, sample-accurate attack/release audio ducking ramps (-30 to -3 dB), with exact 1:1 preview and export parity. |
+| **Phase 11: Future Architectural Enhancements** | 📋 Planned | Offload export compositing to dedicated Web Workers, configure COOP/COEP headers for multi-threaded WASM, add Playwright browser test harness. |

@@ -23,6 +23,15 @@ import type {
 } from "../../types/timeline.ts";
 import { evaluateClipTransform } from "../animation/animationPresets.ts";
 import { getTransitionTimeWindow, getTransitionProgress } from "../transitions/transitionCatalog.ts";
+import {
+  buildCanvasColorFilter,
+  getTemperatureTint,
+  isDefaultColor,
+} from "../color/colorPresets.ts";
+import {
+  collectDialogueIntervals,
+  evaluateDuckingGainAtTime,
+} from "../export/audioDucking.ts";
 
 export interface EvaluatedClip {
   clip: TimelineClip;
@@ -118,12 +127,16 @@ export function evaluateCompositionAtTime(
 
     // Find active clip on this track
     for (const clip of track.clips) {
-      const clipDuration = (clip.sourceOut - clip.sourceIn) / (clip.speed || 1);
+      const clipDuration = clip.freezeFrameSourceTime !== null
+        ? clip.sourceOut - clip.sourceIn
+        : (clip.sourceOut - clip.sourceIn) / (clip.playbackRate || 1.0);
       const clipEnd = clip.startTime + clipDuration;
 
       if (t >= clip.startTime && t < clipEnd) {
-        const offsetSec = (t - clip.startTime) * (clip.speed || 1);
-        const sourceTime = clip.sourceIn + offsetSec;
+        const offsetSec = t - clip.startTime;
+        const sourceTime = clip.freezeFrameSourceTime !== null
+          ? clip.freezeFrameSourceTime
+          : clip.sourceIn + offsetSec * (clip.playbackRate || 1.0);
         const transform = evaluateClipTransform(clip, offsetSec);
 
         activeClips.push({
@@ -139,26 +152,41 @@ export function evaluateCompositionAtTime(
 
   // 2. Process Audio Tracks & Embedded Audio
   const anyAudioTrackSolo = timeline.tracks.some((tr) => tr.type === "audio" && tr.solo);
+  const dialogueIntervals = collectDialogueIntervals(timeline);
 
   for (const track of timeline.tracks) {
     if (track.type !== "audio" && track.type !== "video") continue;
 
     const isTrackMuted = track.muted || (track.type === "audio" && anyAudioTrackSolo && !track.solo);
     const trackGain = track.volume ?? 1.0;
+    const duckingGain = track.ducking?.enabled
+      ? evaluateDuckingGainAtTime(t, dialogueIntervals, track.ducking)
+      : 1.0;
 
     for (const clip of track.clips) {
-      // If on video track, skip if embedded audio was explicitly disabled
-      if (track.type === "video" && clip.embeddedAudioDisabled) continue;
+      // Skip audio entirely for clips where freezeFrameSourceTime !== null or audioDetached === true
+      if (clip.freezeFrameSourceTime !== null) continue;
+      if (track.type === "video" && clip.audioDetached) continue;
 
-      const clipDuration = (clip.sourceOut - clip.sourceIn) / (clip.speed || 1);
+      const clipDuration = (clip.sourceOut - clip.sourceIn) / (clip.playbackRate || 1.0);
       const clipEnd = clip.startTime + clipDuration;
 
       if (t >= clip.startTime && t < clipEnd) {
-        const offsetSec = (t - clip.startTime) * (clip.speed || 1);
-        const sourceTime = clip.sourceIn + offsetSec;
+        const offsetSec = t - clip.startTime;
+        const sourceTime = clip.sourceIn + offsetSec * (clip.playbackRate || 1.0);
         const transform = evaluateClipTransform(clip, offsetSec);
 
-        let finalVol = isTrackMuted || clip.muted ? 0 : transform.volume * trackGain;
+        // Calculate audio fade-in and fade-out envelope gain
+        let envelopeGain = 1.0;
+        if (clip.fadeIn && clip.fadeIn > 0 && offsetSec < clip.fadeIn) {
+          envelopeGain *= Math.max(0, Math.min(1, offsetSec / clip.fadeIn));
+        }
+        const timeRemaining = clipDuration - offsetSec;
+        if (clip.fadeOut && clip.fadeOut > 0 && timeRemaining < clip.fadeOut) {
+          envelopeGain *= Math.max(0, Math.min(1, timeRemaining / clip.fadeOut));
+        }
+
+        let finalVol = isTrackMuted || clip.muted ? 0 : transform.volume * trackGain * envelopeGain * duckingGain;
 
         // Check for audio transitions
         const audioTransitions = (timeline.transitions || []).filter(
@@ -208,8 +236,8 @@ export function evaluateCompositionAtTime(
 
     let renderedText = overlay.text;
     let activeWordIndex: number | null = null;
-    let opacity = 1.0;
-    let offsetY = 0;
+    const opacity = 1.0;
+    const offsetY = 0;
 
     // Check typewriter or word reveal animation
     if (overlay.animationPreset === "typewriter") {
@@ -315,7 +343,7 @@ export function renderOverlayOnCanvas(
   canvasWidth: number,
   canvasHeight: number
 ): void {
-  const { overlay, renderedText, activeWordIndex, opacity, offsetY } = evaluated;
+  const { overlay, renderedText, opacity, offsetY } = evaluated;
   if (!renderedText || opacity <= 0) return;
 
   ctx.save();
@@ -375,8 +403,11 @@ export function renderOverlayOnCanvas(
 
     ctx.fillStyle = bgColor;
     ctx.beginPath();
-    if (typeof (ctx as any).roundRect === "function") {
-      (ctx as any).roundRect(boxX, boxY, boxW, boxH, radius);
+    type ContextWithRoundRect = {
+      roundRect: (x: number, y: number, w: number, h: number, radii?: number | number[]) => void;
+    };
+    if (typeof (ctx as unknown as Partial<ContextWithRoundRect>).roundRect === "function") {
+      (ctx as unknown as ContextWithRoundRect).roundRect(boxX, boxY, boxW, boxH, radius);
     } else {
       ctx.rect(boxX, boxY, boxW, boxH);
     }
@@ -406,6 +437,136 @@ export function renderOverlayOnCanvas(
 
     // Fill Text
     ctx.fillText(lineText, px, lineY);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Canonical clip frame rendering helper shared between Program preview and export pipeline.
+ * Handles crop, fitMode ("fit", "fill", "blur-bg"), flipH, flipV, opacity, and transforms.
+ */
+export function renderClipFrameToCanvas(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  clip: TimelineClip,
+  transform?: EvaluatedClip["transform"]
+): void {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0) return;
+
+  // 1. Normalized crop coordinates (0 to 0.45)
+  const cropLeft = Math.max(0, Math.min(0.45, clip.crop?.left || 0));
+  const cropTop = Math.max(0, Math.min(0.45, clip.crop?.top || 0));
+  const cropRight = Math.max(0, Math.min(0.45, clip.crop?.right || 0));
+  const cropBottom = Math.max(0, Math.min(0.45, clip.crop?.bottom || 0));
+
+  const sx = cropLeft * sourceWidth;
+  const sy = cropTop * sourceHeight;
+  const sw = Math.max(1, sourceWidth * (1 - cropLeft - cropRight));
+  const sh = Math.max(1, sourceHeight * (1 - cropTop - cropBottom));
+
+  const aspectSource = sw / sh;
+  const aspectCanvas = canvasWidth / canvasHeight;
+
+  const t = transform || evaluateClipTransform(clip, 0);
+
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, t.opacity));
+
+  // 2. Position, rotation, scale & flip transforms around center anchor
+  const centerX = canvasWidth / 2 + (t.positionX * canvasWidth) / 100;
+  const centerY = canvasHeight / 2 + (t.positionY * canvasHeight) / 100;
+  ctx.translate(centerX, centerY);
+
+  if (t.rotation !== 0) {
+    ctx.rotate((t.rotation * Math.PI) / 180);
+  }
+
+  const scaleX = t.scaleX * (clip.flipH ? -1 : 1);
+  const scaleY = t.scaleY * (clip.flipV ? -1 : 1);
+  ctx.scale(scaleX, scaleY);
+
+  const fitMode = clip.fitMode || "fit";
+  const hasColorFilter = clip.color && !isDefaultColor(clip.color);
+  const colorFilter = hasColorFilter ? buildCanvasColorFilter(clip.color) : "none";
+  const tempTint = clip.color ? getTemperatureTint(clip.color.temperature) : null;
+
+  if (fitMode === "blur-bg") {
+    // 3A. "blur-bg": Draw source scaled to "fill" with 24px blur and subtle dark scrim
+    ctx.save();
+    try {
+      ctx.filter = "blur(24px)";
+    } catch { /* unsupported in some environments */ }
+
+    const fillW = aspectSource > aspectCanvas ? canvasHeight * aspectSource : canvasWidth;
+    const fillH = aspectSource > aspectCanvas ? canvasHeight : canvasWidth / aspectSource;
+    ctx.drawImage(source, sx, sy, sw, sh, -fillW / 2, -fillH / 2, fillW, fillH);
+
+    try {
+      ctx.filter = "none";
+    } catch {}
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+    ctx.fillRect(-canvasWidth / 2, -canvasHeight / 2, canvasWidth, canvasHeight);
+    ctx.restore();
+
+    // Then draw sharp source frame scaled to "fit" centered on top
+    const fitW = aspectSource > aspectCanvas ? canvasWidth : canvasHeight * aspectSource;
+    const fitH = aspectSource > aspectCanvas ? canvasWidth / aspectSource : canvasHeight;
+    ctx.save();
+    if (hasColorFilter) {
+      try { ctx.filter = colorFilter; } catch {}
+    }
+    ctx.drawImage(source, sx, sy, sw, sh, -fitW / 2, -fitH / 2, fitW, fitH);
+    if (hasColorFilter) {
+      try { ctx.filter = "none"; } catch {}
+    }
+    if (tempTint) {
+      ctx.fillStyle = tempTint.color;
+      ctx.globalAlpha = tempTint.alpha;
+      ctx.fillRect(-fitW / 2, -fitH / 2, fitW, fitH);
+    }
+    ctx.restore();
+  } else if (fitMode === "fill") {
+    // 3B. "fill": Cover canvas preserving aspect ratio
+    const fillW = aspectSource > aspectCanvas ? canvasHeight * aspectSource : canvasWidth;
+    const fillH = aspectSource > aspectCanvas ? canvasHeight : canvasWidth / aspectSource;
+    ctx.save();
+    if (hasColorFilter) {
+      try { ctx.filter = colorFilter; } catch {}
+    }
+    ctx.drawImage(source, sx, sy, sw, sh, -fillW / 2, -fillH / 2, fillW, fillH);
+    if (hasColorFilter) {
+      try { ctx.filter = "none"; } catch {}
+    }
+    if (tempTint) {
+      ctx.fillStyle = tempTint.color;
+      ctx.globalAlpha = tempTint.alpha;
+      ctx.fillRect(-fillW / 2, -fillH / 2, fillW, fillH);
+    }
+    ctx.restore();
+  } else {
+    // 3C. "fit": Letterbox / pillarbox preserving aspect ratio
+    const fitW = aspectSource > aspectCanvas ? canvasWidth : canvasHeight * aspectSource;
+    const fitH = aspectSource > aspectCanvas ? canvasWidth / aspectSource : canvasHeight;
+    ctx.save();
+    if (hasColorFilter) {
+      try { ctx.filter = colorFilter; } catch {}
+    }
+    ctx.drawImage(source, sx, sy, sw, sh, -fitW / 2, -fitH / 2, fitW, fitH);
+    if (hasColorFilter) {
+      try { ctx.filter = "none"; } catch {}
+    }
+    if (tempTint) {
+      ctx.fillStyle = tempTint.color;
+      ctx.globalAlpha = tempTint.alpha;
+      ctx.fillRect(-fitW / 2, -fitH / 2, fitW, fitH);
+    }
+    ctx.restore();
   }
 
   ctx.restore();

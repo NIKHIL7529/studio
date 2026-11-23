@@ -54,15 +54,23 @@ import {
 } from "../lib/timeline/sequenceManager.ts";
 import { insertEdit, overwriteEdit } from "../lib/timeline/editingOperations.ts";
 import { generateCaptionsForTimeline } from "../lib/transcription/captionGenerator.ts";
+import { getDefaultModelId } from "../lib/transcription/modelStorage.ts";
+import { detectCapabilities } from "../lib/capabilities.ts";
 import { MediaPreviewPlayer } from "./MediaPreviewPlayer.tsx";
 import { TimelineEditor } from "./editor/TimelineEditor.tsx";
 import { TimelinePreview } from "./editor/TimelinePreview.tsx";
 import { ClipInspector } from "./editor/ClipInspector.tsx";
+import { CaptionPanel } from "./editor/CaptionPanel.tsx";
 import { ExportModal } from "./editor/ExportModal.tsx";
 import { ProjectRevisionsModal } from "./ProjectRevisionsModal.tsx";
 import { CacheManagerModal } from "./CacheManagerModal.tsx";
 import { RepurposeWorkflow } from "./repurpose/RepurposeWorkflow.tsx";
 import { createProjectRevision } from "../lib/projectRevisions.ts";
+import { TRANSITION_CATALOG, createTimelineTransition } from "../lib/transitions/transitionCatalog.ts";
+import { ANIMATION_PRESETS, applyPresetAsKeyframes } from "../lib/animation/animationPresets.ts";
+import { addTransition } from "../lib/timeline/model.ts";
+import { Group as ResizableGroup, Panel as ResizablePanel, Separator as ResizableSeparator } from "react-resizable-panels";
+import * as Tabs from "@radix-ui/react-tabs";
 import {
   Button,
   IconButton,
@@ -276,8 +284,9 @@ export function ProjectWorkspace({
     if (isGeneratingCaptions) return;
     setIsGeneratingCaptions(true);
     try {
+      const defaultModel = getDefaultModelId(detectCapabilities().webGpu.available);
       const newCaptions = await generateCaptionsForTimeline(timeline, liveAssets, {
-        modelName: "whisper-tiny_timestamped",
+        modelName: defaultModel,
       });
       const nonCaptions = timeline.textOverlays.filter((o) => o.overlayType !== "caption");
       const allOverlays = resolveTextOverlayCollisions([...nonCaptions, ...newCaptions]);
@@ -1325,68 +1334,8 @@ function EditorMode({
     });
   }, []);
 
+  const [activeLeftTab, setActiveLeftTab] = useState<"media" | "captions" | "transitions" | "presets">("media");
   const sourceAsset = (sourceAssetId ? doc.assets.find((a) => a.id === sourceAssetId) : null) || doc.assets[0] || null;
-
-  // Splitter Resize Handlers
-  const handleLeftResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = layoutPrefs.leftWidth;
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const newWidth = Math.max(180, Math.min(480, startWidth + delta));
-      updateLayout({ leftWidth: newWidth, leftOpen: true });
-    };
-
-    const onMouseUp = () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  };
-
-  const handleRightResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = layoutPrefs.rightWidth;
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const delta = startX - moveEvent.clientX;
-      const newWidth = Math.max(200, Math.min(480, startWidth + delta));
-      updateLayout({ rightWidth: newWidth, rightOpen: true });
-    };
-
-    const onMouseUp = () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  };
-
-  const handleTimelineResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startHeight = layoutPrefs.timelineHeight;
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const delta = startY - moveEvent.clientY;
-      const newHeight = Math.max(160, Math.min(550, startHeight + delta));
-      updateLayout({ timelineHeight: newHeight });
-    };
-
-    const onMouseUp = () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-  };
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-cs-bg-base select-none">
@@ -1403,224 +1352,282 @@ function EditorMode({
         />
       )}
 
-      {/* Upper area: sidebar + preview monitors + inspector */}
-      <div className="flex flex-1 overflow-hidden min-h-0 relative" style={{ minHeight: 0 }}>
-        {/* Left sidebar: Media Library */}
-        {layoutPrefs.leftOpen ? (
-          <div
-            className="shrink-0 flex flex-col border-r border-cs-border-subtle bg-cs-bg-surface overflow-hidden relative"
-            style={{ width: layoutPrefs.leftWidth }}
-          >
-            <div className="absolute top-1.5 right-1.5 z-20">
-              <button
-                onClick={() => updateLayout({ leftOpen: false })}
-                className="w-5 h-5 rounded flex items-center justify-center bg-cs-bg-base hover:bg-cs-bg-elevated text-cs-text-tertiary hover:text-cs-text-primary text-[10px] transition-colors"
-                title="Collapse Media Panel"
+      {/* Resizable Editor Panels Shell */}
+      <ResizableGroup orientation="vertical" className="flex-1 min-h-0 w-full overflow-hidden">
+        {/* Upper Workspace Panel (Left Tabs, Monitors, Inspector) */}
+        <ResizablePanel defaultSize={62} minSize={30}>
+          <ResizableGroup orientation="horizontal" className="h-full w-full">
+            {/* Left Panel: Tabbed Navigation (Media Bin, Captions, Transitions, Presets) */}
+            <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
+              <Tabs.Root
+                value={activeLeftTab}
+                onValueChange={(val) => setActiveLeftTab(val as typeof activeLeftTab)}
+                className="flex flex-col h-full bg-cs-bg-surface overflow-hidden border-r border-cs-border-subtle"
               >
-                ◀
-              </button>
-            </div>
-            <MediaLibraryPanel
-              doc={doc}
-              liveAssets={liveAssets}
-              selectedAssetId={sourceAssetId}
-              isImporting={isImporting}
-              importError={importError}
-              onImport={onImport}
-              onSelectAsset={onSelectSourceAsset}
-              onAuthorize={() => {}}
-              onRelink={onRelink}
-              onRemove={onRemove}
-              onDismissImportError={onDismissImportError}
-              compact
-            />
-          </div>
-        ) : (
-          <div
-            className="w-6 shrink-0 bg-cs-bg-surface border-r border-cs-border-subtle flex flex-col items-center py-2 cursor-pointer hover:bg-cs-bg-elevated transition-colors"
-            onClick={() => updateLayout({ leftOpen: true })}
-            title="Expand Media Library"
-          >
-            <span className="text-[10px] text-cs-text-tertiary font-semibold tracking-widest [writing-mode:vertical-lr] rotate-180 mb-2">
-              MEDIA
-            </span>
-            <span className="text-[10px] text-cs-accent">▶</span>
-          </div>
-        )}
+                <Tabs.List className="flex items-center border-b border-cs-border-subtle bg-cs-bg-elevated px-2 py-1 gap-1 text-[11px] shrink-0">
+                  <Tabs.Trigger
+                    value="media"
+                    className="px-2.5 py-1 rounded font-medium text-cs-text-secondary data-[state=active]:bg-cs-bg-active data-[state=active]:text-cs-text-primary transition-colors"
+                  >
+                    Media
+                  </Tabs.Trigger>
+                  <Tabs.Trigger
+                    value="captions"
+                    className="px-2.5 py-1 rounded font-medium text-cs-text-secondary data-[state=active]:bg-cs-bg-active data-[state=active]:text-cs-text-primary transition-colors"
+                  >
+                    Captions
+                  </Tabs.Trigger>
+                  <Tabs.Trigger
+                    value="transitions"
+                    className="px-2.5 py-1 rounded font-medium text-cs-text-secondary data-[state=active]:bg-cs-bg-active data-[state=active]:text-cs-text-primary transition-colors"
+                  >
+                    Transitions
+                  </Tabs.Trigger>
+                  <Tabs.Trigger
+                    value="presets"
+                    className="px-2.5 py-1 rounded font-medium text-cs-text-secondary data-[state=active]:bg-cs-bg-active data-[state=active]:text-cs-text-primary transition-colors"
+                  >
+                    Motion
+                  </Tabs.Trigger>
+                </Tabs.List>
 
-        {/* Left Resizer Handle */}
-        {layoutPrefs.leftOpen && (
-          <div
-            onMouseDown={handleLeftResizeStart}
-            className="w-1 hover:w-1.5 bg-transparent hover:bg-cs-accent/60 cursor-col-resize transition-all shrink-0 z-20"
-            title="Drag to resize Media Panel"
-          />
-        )}
+                {/* Media Bin */}
+                <Tabs.Content value="media" className="flex-1 min-h-0 overflow-hidden outline-none">
+                  <MediaLibraryPanel
+                    doc={doc}
+                    liveAssets={liveAssets}
+                    selectedAssetId={sourceAssetId}
+                    isImporting={isImporting}
+                    importError={importError}
+                    onImport={onImport}
+                    onSelectAsset={onSelectSourceAsset}
+                    onAuthorize={() => {}}
+                    onRelink={onRelink}
+                    onRemove={onRemove}
+                    onDismissImportError={onDismissImportError}
+                    compact
+                  />
+                </Tabs.Content>
 
-        {/* Center: Dual / Single Monitors */}
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-[#09090b]">
-          {/* Monitor View Toggle Header */}
-          <div className="flex items-center justify-between px-3 py-1 bg-cs-bg-surface border-b border-cs-border-subtle text-xs shrink-0">
-            <span className="text-[11px] text-cs-text-tertiary font-semibold uppercase tracking-wider">
-              {layoutPrefs.monitorView === "dual"
-                ? "Source & Program Monitors"
-                : layoutPrefs.monitorView === "source"
-                ? "Source Monitor"
-                : "Program Monitor"}
-            </span>
-            <div className="flex items-center gap-1 bg-cs-bg-elevated rounded p-0.5 border border-cs-border-subtle">
-              <button
-                onClick={() => updateLayout({ monitorView: "source" })}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  layoutPrefs.monitorView === "source"
-                    ? "bg-cs-bg-active text-cs-text-primary"
-                    : "text-cs-text-tertiary hover:text-cs-text-primary"
-                }`}
-                title="Show only Source Monitor"
-              >
-                Source
-              </button>
-              <button
-                onClick={() => updateLayout({ monitorView: "dual" })}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  layoutPrefs.monitorView === "dual"
-                    ? "bg-cs-bg-active text-cs-text-primary"
-                    : "text-cs-text-tertiary hover:text-cs-text-primary"
-                }`}
-                title="Show Source and Program monitors side-by-side"
-              >
-                Dual Monitor
-              </button>
-              <button
-                onClick={() => updateLayout({ monitorView: "program" })}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  layoutPrefs.monitorView === "program"
-                    ? "bg-cs-bg-active text-cs-text-primary"
-                    : "text-cs-text-tertiary hover:text-cs-text-primary"
-                }`}
-                title="Show only Program Monitor"
-              >
-                Program
-              </button>
-            </div>
-          </div>
+                {/* Captions Panel */}
+                <Tabs.Content value="captions" className="flex-1 min-h-0 overflow-hidden outline-none">
+                  <CaptionPanel
+                    timeline={timeline}
+                    liveAssets={liveAssets}
+                    currentTime={currentTime}
+                    onTimelineChange={onTimelineChange}
+                    onSeek={onSeek}
+                  />
+                </Tabs.Content>
 
-          {/* Monitors Workspace */}
-          <div className="flex-1 flex overflow-hidden min-h-0 divide-x divide-cs-border-subtle">
-            {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "source") && (
-              <div className="flex-1 flex flex-col min-w-0">
-                <SourceMonitor
-                  asset={sourceAsset}
-                  liveItem={sourceAsset ? liveAssets.get(sourceAsset.id) : undefined}
-                  timeline={timeline}
-                  onInsertEdit={onInsertEdit}
-                  onOverwriteEdit={onOverwriteEdit}
-                />
+                {/* Transitions Catalog */}
+                <Tabs.Content value="transitions" className="flex-1 min-h-0 overflow-y-auto p-3 outline-none">
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-cs-text-tertiary">
+                      Transition Catalog
+                    </span>
+                    <p className="text-[11px] text-cs-text-tertiary">
+                      Select a clip on the timeline, then click any transition below to apply it.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      {TRANSITION_CATALOG.map((tr) => (
+                        <button
+                          key={tr.type}
+                          onClick={() => {
+                            if (selectedClipId) {
+                              for (const track of timeline.tracks) {
+                                const clip = track.clips.find((c) => c.id === selectedClipId);
+                                if (clip) {
+                                  const t = createTimelineTransition(tr.type, clip.startTime, clip.trackId, {
+                                    toClipId: clip.id,
+                                    duration: 0.8,
+                                    alignment: "center",
+                                  });
+                                  onTimelineChange(addTransition(timeline, t));
+                                  break;
+                                }
+                              }
+                            }
+                          }}
+                          className="p-2 rounded bg-cs-bg-base border border-cs-border-default hover:border-cs-accent hover:text-cs-accent text-left transition-colors flex flex-col gap-0.5"
+                        >
+                          <span className="text-xs font-semibold text-cs-text-primary">{tr.label}</span>
+                          <span className="text-[10px] text-cs-text-tertiary leading-tight">{tr.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </Tabs.Content>
+
+                {/* Motion Presets */}
+                <Tabs.Content value="presets" className="flex-1 min-h-0 overflow-y-auto p-3 outline-none">
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-cs-text-tertiary">
+                      Motion & Animation Presets
+                    </span>
+                    <p className="text-[11px] text-cs-text-tertiary">
+                      Select a clip on the timeline, then click any motion preset below.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      {ANIMATION_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => {
+                            if (selectedClipId) {
+                              const updatedTracks = timeline.tracks.map((t) => ({
+                                ...t,
+                                clips: t.clips.map((c) => (c.id === selectedClipId ? applyPresetAsKeyframes(c, p.id) : c)),
+                              }));
+                              onTimelineChange({ ...timeline, tracks: updatedTracks });
+                            }
+                          }}
+                          className="p-2 rounded bg-cs-bg-base border border-cs-border-default hover:border-cs-accent hover:text-cs-accent text-left transition-colors flex flex-col gap-0.5"
+                        >
+                          <span className="text-xs font-semibold text-cs-text-primary truncate">{p.label}</span>
+                          <span className="text-[10px] text-cs-text-tertiary capitalize">{p.category}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </Tabs.Content>
+              </Tabs.Root>
+            </ResizablePanel>
+
+            <ResizableSeparator className="w-1 bg-cs-border-subtle hover:bg-cs-accent transition-colors cursor-col-resize z-20" />
+
+            {/* Center Panel: Source Monitor + Program Monitor */}
+            <ResizablePanel defaultSize={56} minSize={35}>
+              <div className="flex flex-col h-full overflow-hidden min-w-0 bg-[#09090b]">
+                {/* Monitor View Toggle Header */}
+                <div className="flex items-center justify-between px-3 py-1 bg-cs-bg-surface border-b border-cs-border-subtle text-xs shrink-0">
+                  <span className="text-[11px] text-cs-text-tertiary font-semibold uppercase tracking-wider">
+                    {layoutPrefs.monitorView === "dual"
+                      ? "Source & Program Monitors"
+                      : layoutPrefs.monitorView === "source"
+                      ? "Source Monitor"
+                      : "Program Monitor"}
+                  </span>
+                  <div className="flex items-center gap-1 bg-cs-bg-elevated rounded p-0.5 border border-cs-border-subtle">
+                    <button
+                      onClick={() => updateLayout({ monitorView: "source" })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        layoutPrefs.monitorView === "source"
+                          ? "bg-cs-bg-active text-cs-text-primary"
+                          : "text-cs-text-tertiary hover:text-cs-text-primary"
+                      }`}
+                      title="Show only Source Monitor"
+                    >
+                      Source
+                    </button>
+                    <button
+                      onClick={() => updateLayout({ monitorView: "dual" })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        layoutPrefs.monitorView === "dual"
+                          ? "bg-cs-bg-active text-cs-text-primary"
+                          : "text-cs-text-tertiary hover:text-cs-text-primary"
+                      }`}
+                      title="Show Source and Program monitors side-by-side"
+                    >
+                      Dual Monitor
+                    </button>
+                    <button
+                      onClick={() => updateLayout({ monitorView: "program" })}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        layoutPrefs.monitorView === "program"
+                          ? "bg-cs-bg-active text-cs-text-primary"
+                          : "text-cs-text-tertiary hover:text-cs-text-primary"
+                      }`}
+                      title="Show only Program Monitor"
+                    >
+                      Program
+                    </button>
+                  </div>
+                </div>
+
+                {/* Monitors Workspace */}
+                <div className="flex-1 flex overflow-hidden min-h-0 divide-x divide-cs-border-subtle">
+                  {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "source") && (
+                    <div className="flex-1 flex flex-col min-w-0">
+                      <SourceMonitor
+                        asset={sourceAsset}
+                        liveItem={sourceAsset ? liveAssets.get(sourceAsset.id) : undefined}
+                        timeline={timeline}
+                        onInsertEdit={onInsertEdit}
+                        onOverwriteEdit={onOverwriteEdit}
+                      />
+                    </div>
+                  )}
+                  {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "program") && (
+                    <div className="flex-1 flex flex-col min-w-0">
+                      <TimelinePreview
+                        timeline={timeline}
+                        liveAssets={liveAssets}
+                        currentTime={currentTime}
+                        isPlaying={isPlaying}
+                        onPlaybackTimeUpdate={onPlaybackTimeUpdate}
+                        onPlayPause={onPlayPause}
+                        onTimelineChange={onTimelineChange}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-            {(layoutPrefs.monitorView === "dual" || layoutPrefs.monitorView === "program") && (
-              <div className="flex-1 flex flex-col min-w-0">
-                <TimelinePreview
+            </ResizablePanel>
+
+            <ResizableSeparator className="w-1 bg-cs-border-subtle hover:bg-cs-accent transition-colors cursor-col-resize z-20" />
+
+            {/* Right Panel: Context-Aware Clip & Properties Inspector */}
+            <ResizablePanel defaultSize={22} minSize={15} maxSize={35}>
+              <div className="flex flex-col h-full overflow-hidden border-l border-cs-border-subtle">
+                <ClipInspector
                   timeline={timeline}
+                  selectedClipId={selectedClipId}
+                  selectedOverlayId={selectedOverlayId}
+                  selectedTransitionId={selectedTransitionId}
+                  selectedTrackId={selectedTrackId}
                   liveAssets={liveAssets}
                   currentTime={currentTime}
-                  isPlaying={isPlaying}
-                  onPlaybackTimeUpdate={onPlaybackTimeUpdate}
-                  onPlayPause={onPlayPause}
+                  onTimelineChange={onTimelineChange}
+                  onAddTextOverlay={onAddTextOverlay}
+                  onSelectTrack={onSelectTrack}
+                  onSelectTransition={onSelectTransition}
+                  onGenerateCaptions={onGenerateCaptions}
+                  isGeneratingCaptions={isGeneratingCaptions}
                 />
               </div>
-            )}
-          </div>
-        </div>
+            </ResizablePanel>
+          </ResizableGroup>
+        </ResizablePanel>
 
-        {/* Right Resizer Handle */}
-        {layoutPrefs.rightOpen && (
-          <div
-            onMouseDown={handleRightResizeStart}
-            className="w-1 hover:w-1.5 bg-transparent hover:bg-cs-accent/60 cursor-col-resize transition-all shrink-0 z-20"
-            title="Drag to resize Inspector"
-          />
-        )}
+        <ResizableSeparator className="h-1 bg-cs-border-subtle hover:bg-cs-accent transition-colors cursor-row-resize z-20" />
 
-        {/* Right: Inspector */}
-        {layoutPrefs.rightOpen ? (
-          <div
-            className="shrink-0 overflow-hidden border-l border-cs-border-subtle relative flex flex-col"
-            style={{ width: layoutPrefs.rightWidth }}
-          >
-            <div className="absolute top-1.5 right-1.5 z-20">
-              <button
-                onClick={() => updateLayout({ rightOpen: false })}
-                className="w-5 h-5 rounded flex items-center justify-center bg-cs-bg-base hover:bg-cs-bg-elevated text-cs-text-tertiary hover:text-cs-text-primary text-[10px] transition-colors"
-                title="Collapse Inspector"
-              >
-                ▶
-              </button>
-            </div>
-            <ClipInspector
+        {/* Bottom Workspace Panel: Multi-Track Timeline */}
+        <ResizablePanel defaultSize={38} minSize={20}>
+          <div className="flex flex-col h-full overflow-hidden border-t border-cs-border-subtle">
+            <TimelineEditor
               timeline={timeline}
+              liveAssets={liveAssets}
+              currentTime={currentTime}
+              isPlaying={isPlaying}
+              onTimelineChange={onTimelineChange}
+              onSeek={onSeek}
+              onPlayPause={onPlayPause}
               selectedClipId={selectedClipId}
               selectedOverlayId={selectedOverlayId}
               selectedTransitionId={selectedTransitionId}
               selectedTrackId={selectedTrackId}
-              liveAssets={liveAssets}
-              currentTime={currentTime}
-              onTimelineChange={onTimelineChange}
-              onAddTextOverlay={onAddTextOverlay}
-              onSelectTrack={onSelectTrack}
+              onSelectClip={onSelectClip}
+              onSelectOverlay={onSelectOverlay}
               onSelectTransition={onSelectTransition}
-              onGenerateCaptions={onGenerateCaptions}
-              isGeneratingCaptions={isGeneratingCaptions}
+              onSelectTrack={onSelectTrack}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={onUndo}
+              onRedo={onRedo}
             />
           </div>
-        ) : (
-          <div
-            className="w-6 shrink-0 bg-cs-bg-surface border-l border-cs-border-subtle flex flex-col items-center py-2 cursor-pointer hover:bg-cs-bg-elevated transition-colors"
-            onClick={() => updateLayout({ rightOpen: true })}
-            title="Expand Inspector"
-          >
-            <span className="text-[10px] text-cs-text-tertiary font-semibold tracking-widest [writing-mode:vertical-lr] rotate-180 mb-2">
-              INSPECTOR
-            </span>
-            <span className="text-[10px] text-cs-accent">◀</span>
-          </div>
-        )}
-      </div>
-
-      {/* Horizontal Timeline Resizer Handle */}
-      <div
-        onMouseDown={handleTimelineResizeStart}
-        className="h-1 hover:h-1.5 bg-transparent hover:bg-cs-accent/60 cursor-row-resize transition-all shrink-0 z-20"
-        title="Drag to resize Timeline"
-      />
-
-      {/* Bottom: Timeline Editor */}
-      <div
-        className="shrink-0 overflow-hidden border-t border-cs-border-subtle"
-        style={{ height: layoutPrefs.timelineHeight }}
-      >
-        <TimelineEditor
-          timeline={timeline}
-          liveAssets={liveAssets}
-          currentTime={currentTime}
-          isPlaying={isPlaying}
-          onTimelineChange={onTimelineChange}
-          onSeek={onSeek}
-          onPlayPause={onPlayPause}
-          selectedClipId={selectedClipId}
-          selectedOverlayId={selectedOverlayId}
-          selectedTransitionId={selectedTransitionId}
-          selectedTrackId={selectedTrackId}
-          onSelectClip={onSelectClip}
-          onSelectOverlay={onSelectOverlay}
-          onSelectTransition={onSelectTransition}
-          onSelectTrack={onSelectTrack}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onUndo={onUndo}
-          onRedo={onRedo}
-        />
-      </div>
+        </ResizablePanel>
+      </ResizableGroup>
     </div>
   );
 }

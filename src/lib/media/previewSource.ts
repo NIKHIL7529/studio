@@ -62,6 +62,61 @@ export class ObjectUrlManager {
   }
 }
 
+/**
+ * Manages caching and safe disposal of ImageBitmap instances.
+ */
+export class ImageBitmapManager {
+  private activeBitmaps = new Map<string, ImageBitmap>();
+
+  /**
+   * Retrieves or creates a cached ImageBitmap for a given key and File/Blob source.
+   */
+  async get(key: string, source: Blob | File): Promise<ImageBitmap> {
+    const existing = this.activeBitmaps.get(key);
+    if (existing) return existing;
+
+    if (typeof createImageBitmap === "function") {
+      const bmp = await createImageBitmap(source);
+      this.activeBitmaps.set(key, bmp);
+      return bmp;
+    }
+    throw new Error("createImageBitmap is not available in this environment.");
+  }
+
+  has(key: string): boolean {
+    return this.activeBitmaps.has(key);
+  }
+
+  /**
+   * Releases and closes an individual ImageBitmap.
+   */
+  release(key: string): void {
+    const bmp = this.activeBitmaps.get(key);
+    if (bmp) {
+      try {
+        bmp.close();
+      } catch { /* ignored */ }
+      this.activeBitmaps.delete(key);
+    }
+  }
+
+  /**
+   * Releases and closes all cached ImageBitmap instances.
+   */
+  releaseAll(): void {
+    for (const bmp of this.activeBitmaps.values()) {
+      try {
+        bmp.close();
+      } catch { /* ignored */ }
+    }
+    this.activeBitmaps.clear();
+  }
+
+  get size(): number {
+    return this.activeBitmaps.size;
+  }
+}
+
 export interface UseMediaPreviewResult {
   mediaRef: React.RefObject<HTMLVideoElement | HTMLAudioElement | null>;
   state: PreviewSourceState;

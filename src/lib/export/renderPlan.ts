@@ -173,12 +173,13 @@ export function buildRenderPlan(
     }
 
     const inspected = liveItem.asset.metadata;
+    const isImage = assetMeta.mediaType === "image" || assetMeta.kind === "image" || inspected?.containerFormat === "IMAGE";
     const hasVideo = inspected
-      ? inspected.videoTracks.length > 0
-      : (assetMeta.mediaType === "video");
-    const hasAudio = inspected
+      ? inspected.videoTracks.length > 0 || isImage
+      : (assetMeta.mediaType === "video" || isImage);
+    const hasAudio = !isImage && (inspected
       ? inspected.audioTracks.length > 0
-      : (assetMeta.mediaType === "audio" || assetMeta.mediaType === "video");
+      : (assetMeta.mediaType === "audio" || assetMeta.mediaType === "video"));
 
     sources.set(assetId, {
       assetId,
@@ -215,14 +216,26 @@ export function buildRenderPlan(
     let activeClip: RenderPlanVideoFrame["activeClip"] = null;
     for (const track of videoTracks) {
       for (const clip of track.clips) {
-        const clipDuration = clip.sourceOut - clip.sourceIn;
+        const clipDuration = clip.freezeFrameSourceTime !== null
+          ? clip.sourceOut - clip.sourceIn
+          : (clip.sourceOut - clip.sourceIn) / (clip.playbackRate || 1.0);
         const endTime = clip.startTime + clipDuration;
         if (presentationTimeSeconds >= clip.startTime && presentationTimeSeconds < endTime) {
-          const offset = presentationTimeSeconds - clip.startTime;
-          const sourceTimeSeconds = Math.min(
-            clip.sourceOut - 0.0001,
-            Math.max(clip.sourceIn, clip.sourceIn + offset)
-          );
+          let sourceTimeSeconds: number;
+          if (clip.freezeFrameSourceTime !== null) {
+            sourceTimeSeconds = clip.freezeFrameSourceTime;
+          } else {
+            const startUs = BigInt(Math.round(clip.startTime * 1_000_000));
+            const sourceInUs = BigInt(Math.round(clip.sourceIn * 1_000_000));
+            const offsetUs = presentationTimeUs - startUs;
+            const rateScaledUs = BigInt(Math.round(Number(offsetUs) * (clip.playbackRate || 1.0)));
+            const sourceTimeUs = sourceInUs + rateScaledUs;
+            sourceTimeSeconds = Number(sourceTimeUs) / 1_000_000;
+            sourceTimeSeconds = Math.min(
+              clip.sourceOut - 0.0001,
+              Math.max(clip.sourceIn, sourceTimeSeconds)
+            );
+          }
           activeClip = {
             clipId: clip.id,
             assetId: clip.assetId,
@@ -262,6 +275,14 @@ export function buildRenderPlan(
         continue;
       }
 
+      // Skip audio entirely for clips where freezeFrameSourceTime !== null or audioDetached === true
+      if (clip.freezeFrameSourceTime !== null) {
+        continue;
+      }
+      if (track.type === "video" && clip.audioDetached) {
+        continue;
+      }
+
       // If this is a video track clip linked to an audio clip on an audio track,
       // the audio track clip is authoritative: skip the video clip to prevent double audio.
       if (track.type === "video" && clip.linkedClipId) {
@@ -273,7 +294,7 @@ export function buildRenderPlan(
         }
       }
 
-      const clipDuration = clip.sourceOut - clip.sourceIn;
+      const clipDuration = (clip.sourceOut - clip.sourceIn) / (clip.playbackRate || 1.0);
       if (clipDuration <= 0) continue;
 
       const isMuted = track.muted || clip.muted || (anyAudioSolo && !track.solo);
@@ -287,9 +308,15 @@ export function buildRenderPlan(
         timelineEndSeconds: clip.startTime + clipDuration,
         sourceInSeconds: clip.sourceIn,
         sourceOutSeconds: clip.sourceOut,
+        playbackRate: clip.playbackRate ?? 1.0,
+        preservePitch: clip.preservePitch ?? true,
         volume,
         trackId: track.id,
         trackOrder: track.order,
+        fadeIn: clip.fadeIn || 0,
+        fadeOut: clip.fadeOut || 0,
+        audioRole: track.audioRole,
+        ducking: track.ducking,
       });
     }
   }

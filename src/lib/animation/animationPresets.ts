@@ -17,7 +17,6 @@ import type {
   AnimationPresetId,
   AnimationCategory,
   ClipAnimationPreset,
-  ClipTransform,
   TimelineClip,
   TextOverlay,
 } from "../../types/timeline.ts";
@@ -28,7 +27,7 @@ export interface AnimationPresetDefinition {
   label: string;
   description: string;
   defaultDuration: number;
-  generateKeyframes: (duration: number, clipDuration: number, params?: Record<string, any>) => ClipKeyframe[];
+  generateKeyframes: (duration: number, clipDuration: number, params?: Record<string, unknown>) => ClipKeyframe[];
 }
 
 /**
@@ -616,8 +615,8 @@ export function evaluateOverlayAnimation(
   const offset = time - overlay.startTime;
   let renderedText = overlay.text;
   let activeWordIndex: number | null = null;
-  let opacity = 1.0;
-  let offsetY = 0;
+  const opacity = 1.0;
+  const offsetY = 0;
 
   if (overlay.animationPreset === "typewriter") {
     const animDur = Math.min(dur * 0.8, 1.8);

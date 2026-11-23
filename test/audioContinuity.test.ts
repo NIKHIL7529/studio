@@ -134,6 +134,8 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
         timelineEndSeconds: 2.0,
         sourceInSeconds: 0.0,
         sourceOutSeconds: 2.0,
+        playbackRate: 1.0,
+        preservePitch: true,
         volume: 1.0,
         trackId: "track-1",
         trackOrder: 0,
@@ -145,6 +147,8 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
         timelineEndSeconds: 2.5,
         sourceInSeconds: 0.0,
         sourceOutSeconds: 2.0,
+        playbackRate: 1.0,
+        preservePitch: true,
         volume: 0.5,
         trackId: "track-2",
         trackOrder: 1,
@@ -156,6 +160,8 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
         timelineEndSeconds: 3.0,
         sourceInSeconds: 0.0,
         sourceOutSeconds: 1.0,
+        playbackRate: 1.0,
+        preservePitch: true,
         volume: 0.0, // muted
         trackId: "track-1",
         trackOrder: 0,
@@ -277,6 +283,8 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
         timelineEndSeconds: 1.0,
         sourceInSeconds: 0.0,
         sourceOutSeconds: 1.0,
+        playbackRate: 1.0,
+        preservePitch: true,
         volume: 1.0,
         trackId: "track-voice",
         trackOrder: 0,
@@ -288,6 +296,8 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
         timelineEndSeconds: 2.0,
         sourceInSeconds: 1.0,
         sourceOutSeconds: 2.0,
+        playbackRate: 1.0,
+        preservePitch: true,
         volume: 1.0,
         trackId: "track-voice",
         trackOrder: 0,
@@ -380,6 +390,112 @@ describe("Audio Continuity, Resampling & Sample-Driven Mixing", () => {
     }
 
     straddleBlock.close();
+    mixer.dispose();
+  });
+
+  test("AudioTrackMixer applies fadeIn and fadeOut ramps accurately across blocks", async () => {
+    const mockPlan: RenderPlan = {
+      projectId: "proj-envelope",
+      projectName: "Fade Test",
+      timelineId: "tl-fade",
+      createdAt: new Date().toISOString(),
+      settings: {
+        targetAspectRatio: "16:9",
+        width: 1280,
+        height: 720,
+        frameRate: 30,
+        videoCodec: "avc",
+        audioCodec: "aac",
+        format: "mp4",
+        quality: "high",
+        audioSampleRate: 48000,
+        audioChannels: 2,
+        filename: "test.mp4",
+      },
+      frameRate: 30,
+      totalDurationSeconds: 4.0,
+      totalFrames: 120,
+      sources: new Map(),
+      missingSources: [],
+      videoFrames: [],
+      audioSegments: [
+        {
+          clipId: "clip-fade-1",
+          assetId: "mock-tone",
+          timelineStartSeconds: 0.0,
+          timelineEndSeconds: 4.0,
+          sourceInSeconds: 0.0,
+          sourceOutSeconds: 4.0,
+          playbackRate: 1.0,
+          preservePitch: true,
+          volume: 1.0,
+          fadeIn: 1.0,  // 1s fade in = 48000 samples
+          fadeOut: 1.0, // 1s fade out = 48000 samples
+          trackId: "track-1",
+          trackOrder: 0,
+        },
+      ],
+      hasVideo: false,
+      hasAudio: true,
+      isValid: true,
+      validationErrors: [],
+    };
+
+    // Constant 1.0 DC amplitude sink
+    const constantSink = {
+      samples: async function* () {
+        const frames = 48000;
+        for (let p = 0; p < 4; p++) {
+          const data = new Float32Array(frames * 2).fill(1.0);
+          yield {
+            timestamp: p,
+            duration: 1.0,
+            sampleRate: 48000,
+            numberOfChannels: 2,
+            numberOfFrames: frames,
+            format: "f32-planar",
+            copyTo(dest: Float32Array, opts: { planeIndex: number }) {
+              const off = opts.planeIndex === 1 ? frames : 0;
+              dest.set(data.subarray(off, off + frames));
+            },
+            close() {},
+          };
+        }
+      },
+    } as unknown as AudioSampleSink;
+
+    const mixer = new AudioTrackMixer(mockPlan, new Map([["mock-tone", constantSink]]), {
+      outputSampleRate: 48000,
+      outputChannels: 2,
+    });
+
+    // Render block 1: 0 to 48000 (fade-in region)
+    const b1 = await mixer.renderBlock(0, 48000);
+    assert.ok(b1);
+    const b1Data = new Float32Array(48000);
+    b1.copyTo(b1Data, { planeIndex: 0, format: "f32-planar" });
+
+    // Mid-point of fade in (sample 24000 = 0.5s): amplitude should be ~0.5
+    assert.ok(Math.abs(b1Data[24000] - 0.5) < 0.05, `Expected ~0.5, got ${b1Data[24000]}`);
+
+    // Render block 2: 48000 to 96000 (steady region 1.0s to 2.0s): amplitude should be ~1.0
+    const b2 = await mixer.renderBlock(48000, 48000);
+    assert.ok(b2);
+    const b2Data = new Float32Array(48000);
+    b2.copyTo(b2Data, { planeIndex: 0, format: "f32-planar" });
+    assert.ok(Math.abs(b2Data[24000] - 1.0) < 0.05, `Expected ~1.0, got ${b2Data[24000]}`);
+
+    // Render block 4: 144000 to 192000 (fade-out region 3.0s to 4.0s)
+    const b4 = await mixer.renderBlock(144000, 48000);
+    assert.ok(b4);
+    const b4Data = new Float32Array(48000);
+    b4.copyTo(b4Data, { planeIndex: 0, format: "f32-planar" });
+    // Mid-point of fade out (sample 24000): amplitude should be ~0.5
+    assert.ok(Math.abs(b4Data[24000] - 0.5) < 0.05, `Expected ~0.5, got ${b4Data[24000]}`);
+
+    b1.close();
+    b2.close();
+    b4.close();
     mixer.dispose();
   });
 });

@@ -20,15 +20,28 @@ test("inferMediaCategory accurately classifies video and audio formats", () => {
   assert.equal(inferMediaCategory("podcast.m4a"), "audio");
   assert.equal(inferMediaCategory("audio.aac"), "audio");
 
+  // Supported Images
+  assert.equal(inferMediaCategory("image.png"), "image");
+  assert.equal(inferMediaCategory("photo.jpg"), "image");
+  assert.equal(inferMediaCategory("picture.jpeg"), "image");
+  assert.equal(inferMediaCategory("logo.webp"), "image");
+
+  // Disallowed image formats (restricted to avoid canvas issues)
+  assert.equal(inferMediaCategory("graphic.svg"), "unknown");
+  assert.equal(inferMediaCategory("anim.gif"), "unknown");
+  assert.equal(inferMediaCategory("bitmap.bmp"), "unknown");
+  assert.equal(inferMediaCategory("modern.avif"), "unknown");
+  assert.equal(inferMediaCategory("icon.svg", "image/svg+xml"), "unknown");
+
   // Unknown
   assert.equal(inferMediaCategory("document.pdf"), "unknown");
-  assert.equal(inferMediaCategory("image.png"), "unknown");
 });
 
 test("compareRelinkMetadata flags differences in filename, size, and date", () => {
   const asset: ProjectAsset = {
     id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     name: "interview.mp4",
+    kind: "video",
     mediaType: "video",
     mimeType: "video/mp4",
     size: 204800,

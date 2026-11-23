@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { applyEditPlanToTimeline, createEditPlanFromCandidates } from "../src/lib/repurpose/editPlan.ts";
+import { applyCaptionStyleToAll } from "../src/lib/transcription/captionGenerator.ts";
 import type { RepurposeCandidate } from "../src/types/repurpose.ts";
 import type { SourceTranscript } from "../src/types/transcription.ts";
 
@@ -158,5 +159,94 @@ describe("Timeline Sequence & Timed Caption Construction", () => {
     assert.equal(caption.preset, "clean");
     assert.equal(caption.boxWidthRatio, 0.85);
     assert.ok(caption.backgroundColor !== undefined);
+  });
+
+  test("applyCaptionStyleToAll updates all captions while preserving non-captions", () => {
+    const editPlan = createEditPlanFromCandidates(
+      "a0000000-0000-4000-8000-000000000001",
+      [candidate1],
+      "educational",
+      "9:16"
+    );
+
+    const { timeline } = applyEditPlanToTimeline(editPlan, undefined, sourceTranscripts);
+    assert.ok(timeline.textOverlays.length > 0);
+
+    // Apply bulk style
+    const updated = applyCaptionStyleToAll(timeline, {
+      color: "#00ffcc",
+      activeWordColor: "#ff0077",
+      fontSize: 36,
+      preset: "bold",
+    });
+
+    for (const ov of updated.textOverlays) {
+      if (ov.overlayType === "caption") {
+        assert.equal(ov.color, "#00ffcc");
+        assert.equal(ov.activeWordColor, "#ff0077");
+        assert.equal(ov.fontSize, 36);
+        assert.equal(ov.preset, "bold");
+      }
+    }
+  });
+
+  test("multi-cut captions enforce strictly monotonic non-overlapping intervals", () => {
+    // Create adjacent candidate cuts
+    const candA: RepurposeCandidate = {
+      ...candidate1,
+      id: "cut-a",
+      sourceIn: 10.0,
+      sourceOut: 15.0,
+      duration: 5.0,
+    };
+    const candB: RepurposeCandidate = {
+      ...candidate2,
+      id: "cut-b",
+      sourceIn: 15.0,
+      sourceOut: 20.0,
+      duration: 5.0,
+    };
+
+    const multiTranscripts = new Map<string, SourceTranscript>([
+      [
+        "asset-a",
+        {
+          sourceAssetId: "asset-a",
+          sourceAssetName: "speaker-1.mp4",
+          engine: "browser-whisper",
+          duration: 30.0,
+          cues: [
+            { id: "c1", start: 10.0, end: 12.5, text: "Part one" },
+            { id: "c2", start: 12.5, end: 15.2, text: "Part two (bleeds slightly past cut)" },
+            { id: "c3", start: 15.0, end: 18.0, text: "Part three at start of second cut" },
+          ],
+          fullText: "Part one Part two Part three",
+          coverage: [{ start: 10.0, end: 18.0 }],
+          createdAt: new Date().toISOString(),
+          isWordLevel: false,
+        },
+      ],
+    ]);
+
+    const plan = createEditPlanFromCandidates(
+      "a0000000-0000-4000-8000-000000000001",
+      [candA, candB],
+      "educational",
+      "9:16"
+    );
+
+    const { timeline } = applyEditPlanToTimeline(plan, undefined, multiTranscripts);
+    const caps = timeline.textOverlays.filter((o) => o.overlayType === "caption");
+
+    // Check monotonic non-overlapping condition
+    for (let i = 0; i < caps.length - 1; i++) {
+      assert.ok(
+        caps[i].endTime <= caps[i + 1].startTime + 0.001,
+        `Captions must not overlap: ${caps[i].endTime} <= ${caps[i + 1].startTime}`
+      );
+    }
+
+    // Cue 2 must not extend past cut-a (timelineEnd <= 5.0)
+    assert.ok(caps[1].endTime <= 5.0001, "Caption must not bleed past parent clip duration");
   });
 });

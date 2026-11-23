@@ -5,7 +5,7 @@ import {
   getDefaultExportSettings,
   buildRenderPlan,
 } from "../src/lib/export/renderPlan.ts";
-import { createTimeline, addClipToTrack, addTextOverlay } from "../src/lib/timeline/model.ts";
+import { createTimeline, createTrack, createClip, createTextOverlay, addClipToTrack, addTextOverlay } from "../src/lib/timeline/model.ts";
 import type { ProjectDocument, LiveAssetItem } from "../src/types/project.ts";
 
 function createMockProject(): ProjectDocument {
@@ -19,6 +19,7 @@ function createMockProject(): ProjectDocument {
       {
         id: "b0000000-0000-4000-8000-000000000001",
         name: "clip1.mp4",
+        kind: "video",
         mediaType: "video",
         mimeType: "video/mp4",
         size: 10_000_000,
@@ -34,6 +35,7 @@ function createMockProject(): ProjectDocument {
       {
         id: "b0000000-0000-4000-8000-000000000002",
         name: "music.mp3",
+        kind: "audio",
         mediaType: "audio",
         mimeType: "audio/mpeg",
         size: 5_000_000,
@@ -132,14 +134,8 @@ describe("buildRenderPlan", () => {
 
     // Clip 1: 0s to 5s (source 10s to 15s)
     timeline = addClipToTrack(timeline, videoTrack.id, {
+      ...createClip(proj.assets[0].id, videoTrack.id, 0, 10, 15),
       id: "clip-1",
-      assetId: proj.assets[0].id,
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 10,
-      sourceOut: 15,
-      volume: 1,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -179,14 +175,8 @@ describe("buildRenderPlan", () => {
 
     // Clip 1: 2s to 4s (gap before at 0-2s)
     timeline = addClipToTrack(timeline, videoTrack.id, {
+      ...createClip(proj.assets[0].id, videoTrack.id, 2, 0, 2),
       id: "clip-gap",
-      assetId: proj.assets[0].id,
-      trackId: videoTrack.id,
-      startTime: 2,
-      sourceIn: 0,
-      sourceOut: 2,
-      volume: 1,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -216,37 +206,21 @@ describe("buildRenderPlan", () => {
 
     // Track 2 (order 1)
     const bottomTrack = {
+      ...createTrack("video", "Video 2", 1, "dialogue"),
       id: "track-video-2",
-      type: "video" as const,
-      name: "Video 2",
-      order: 1,
-      muted: false,
-      clips: [],
     };
     timeline.tracks.push(bottomTrack);
 
     // Clip on bottom track from 0 to 4s
     timeline = addClipToTrack(timeline, bottomTrack.id, {
+      ...createClip(proj.assets[0].id, bottomTrack.id, 0, 0, 4),
       id: "clip-bottom",
-      assetId: proj.assets[0].id,
-      trackId: bottomTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 4,
-      volume: 1,
-      muted: false,
     });
 
     // Clip on top track from 1 to 3s
     timeline = addClipToTrack(timeline, topTrack.id, {
+      ...createClip(proj.assets[0].id, topTrack.id, 1, 0, 2),
       id: "clip-top",
-      assetId: proj.assets[0].id,
-      trackId: topTrack.id,
-      startTime: 1,
-      sourceIn: 0,
-      sourceOut: 2,
-      volume: 1,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -272,14 +246,9 @@ describe("buildRenderPlan", () => {
 
     // Audio clip with 0.7 volume
     timeline = addClipToTrack(timeline, audioTrack.id, {
+      ...createClip(proj.assets[1].id, audioTrack.id, 0, 5, 15),
       id: "audio-clip-1",
-      assetId: proj.assets[1].id,
-      trackId: audioTrack.id,
-      startTime: 0,
-      sourceIn: 5,
-      sourceOut: 15,
       volume: 0.7,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -303,22 +272,15 @@ describe("buildRenderPlan", () => {
     const videoTrack = timeline.tracks.find((t) => t.type === "video")!;
 
     timeline = addClipToTrack(timeline, videoTrack.id, {
+      ...createClip(proj.assets[0].id, videoTrack.id, 0, 0, 6),
       id: "clip-1",
-      assetId: proj.assets[0].id,
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 6,
-      volume: 1,
-      muted: false,
     });
 
     // Overlay active from 2s to 4s
     timeline = addTextOverlay(timeline, {
+      ...createTextOverlay(2, 4),
       id: "overlay-1",
       text: "Hello World",
-      startTime: 2,
-      endTime: 4,
       x: 0.5,
       y: 0.8,
       fontSize: 32,
@@ -352,14 +314,8 @@ describe("buildRenderPlan", () => {
     const videoTrack = timeline.tracks.find((t) => t.type === "video")!;
 
     timeline = addClipToTrack(timeline, videoTrack.id, {
+      ...createClip("nonexistent-asset-id", videoTrack.id, 0, 0, 5),
       id: "clip-offline",
-      assetId: "nonexistent-asset-id",
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 5,
-      volume: 1,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -378,14 +334,8 @@ describe("buildRenderPlan", () => {
     const videoTrack = timeline.tracks.find((t) => t.type === "video")!;
 
     timeline = addClipToTrack(timeline, videoTrack.id, {
+      ...createClip(proj.assets[0].id, videoTrack.id, 0, 0, 5),
       id: "clip-immutable",
-      assetId: proj.assets[0].id,
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 5,
-      volume: 1,
-      muted: false,
     });
 
     const settings = getDefaultExportSettings("16:9", "1080p", proj.name);
@@ -396,14 +346,8 @@ describe("buildRenderPlan", () => {
 
     // Now mutate timeline by adding another clip
     timeline.tracks[0].clips.push({
+      ...createClip(proj.assets[0].id, videoTrack.id, 10, 0, 5),
       id: "clip-later",
-      assetId: proj.assets[0].id,
-      trackId: videoTrack.id,
-      startTime: 10,
-      sourceIn: 0,
-      sourceOut: 5,
-      volume: 1,
-      muted: false,
     });
 
     // Plan total frames remains 150

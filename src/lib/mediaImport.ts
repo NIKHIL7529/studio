@@ -9,7 +9,7 @@
  * - Removing an asset removes the reference, never the original file.
  */
 
-import type { ProjectAsset, MediaCategory, LiveAssetItem } from "../types/project.ts";
+import type { ProjectAsset, MediaKind, MediaCategory, LiveAssetItem } from "../types/project.ts";
 import { saveFileHandle, loadFileHandle, removeFileHandle } from "./idb.ts";
 import { computeMediaFingerprint } from "./media/fingerprint.ts";
 
@@ -17,19 +17,27 @@ import { computeMediaFingerprint } from "./media/fingerprint.ts";
 const sessionFileRegistry = new Map<string, File>();
 
 /**
- * Categorizes a file as "video" | "audio" | "unknown" using MIME and extension hints.
+ * Categorizes a file as "video" | "audio" | "image" | "unknown" using MIME and extension hints.
  */
 export function inferMediaCategory(fileName: string, mimeType?: string): MediaCategory {
-  const mime = (mimeType || "").toLowerCase();
-  if (mime.startsWith("video/")) return "video";
-  if (mime.startsWith("audio/")) return "audio";
-
   const ext = fileName.slice(fileName.lastIndexOf(".")).toLowerCase();
   const videoExts = [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi", ".wmv", ".flv", ".ogv", ".ts"];
   const audioExts = [".mp3", ".wav", ".aac", ".m4a", ".ogg", ".flac", ".opus", ".wma", ".aiff"];
+  const imageExts = [".png", ".jpg", ".jpeg", ".webp"];
+
+  const mime = (mimeType || "").toLowerCase();
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("image/")) {
+    if (ext && !imageExts.includes(ext)) {
+      return "unknown";
+    }
+    return "image";
+  }
 
   if (videoExts.includes(ext)) return "video";
   if (audioExts.includes(ext)) return "audio";
+  if (imageExts.includes(ext)) return "image";
 
   return "unknown";
 }
@@ -49,14 +57,15 @@ function generateAssetId(): string {
 }
 
 /**
- * Picker filter configuration for video and audio files.
+ * Picker filter configuration for video, audio, and image files.
  */
 const FILE_PICKER_TYPES: FilePickerAcceptType[] = [
   {
-    description: "Video and Audio Files",
+    description: "Media Files (Video, Audio, Images)",
     accept: {
       "video/*": [".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"],
       "audio/*": [".mp3", ".wav", ".aac", ".m4a", ".ogg", ".flac", ".opus"],
+      "image/*": [".png", ".jpg", ".jpeg", ".webp"],
     },
   },
 ];
@@ -114,6 +123,7 @@ export async function pickAndImportFiles(
     });
 
     const category = inferMediaCategory(file.name, file.type);
+    const kind: MediaKind = category === "image" ? "image" : category === "audio" ? "audio" : "video";
 
     let fingerprint: string | undefined = undefined;
     try {
@@ -125,6 +135,7 @@ export async function pickAndImportFiles(
     newAssets.push({
       id: generateAssetId(),
       name: file.name,
+      kind,
       mediaType: category,
       mimeType: file.type || "",
       size: file.size,
@@ -162,6 +173,7 @@ export async function importFallbackFiles(
     sessionFileRegistry.set(handleRefId, file);
 
     const category = inferMediaCategory(file.name, file.type);
+    const kind: MediaKind = category === "image" ? "image" : category === "audio" ? "audio" : "video";
 
     let fingerprint: string | undefined = undefined;
     try {
@@ -173,6 +185,7 @@ export async function importFallbackFiles(
     newAssets.push({
       id: generateAssetId(),
       name: file.name,
+      kind,
       mediaType: category,
       mimeType: file.type || "",
       size: file.size,

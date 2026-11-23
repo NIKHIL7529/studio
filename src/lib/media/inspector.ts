@@ -23,6 +23,126 @@ export interface InspectOptions {
 }
 
 /**
+ * Inspects image files (.png, .jpg, .jpeg, .webp) for natural dimensions.
+ * Uses createImageBitmap in the browser, with lightweight binary header parsing for Node tests.
+ */
+export async function inspectImageDimensions(
+  file: File | Blob
+): Promise<{ width: number; height: number; mimeType: string } | null> {
+  const fileName = "name" in file ? (file.name as string).toLowerCase() : "";
+  const mimeType = (file.type || "").toLowerCase();
+
+  // In browser environments with createImageBitmap support
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const width = bitmap.width;
+      const height = bitmap.height;
+      bitmap.close();
+      if (width > 0 && height > 0) {
+        return {
+          width,
+          height,
+          mimeType: mimeType || (fileName.endsWith(".webp") ? "image/webp" : fileName.endsWith(".png") ? "image/png" : "image/jpeg"),
+        };
+      }
+    } catch {
+      // Fall through to binary header parser
+    }
+  }
+
+  // Lightweight binary header parsing for Node.js test environments
+  try {
+    const buffer = await file.slice(0, 65536).arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const view = new DataView(buffer);
+
+    // 1. PNG Header: 89 50 4E 47 0D 0A 1A 0A
+    if (
+      bytes.length >= 24 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47
+    ) {
+      const width = view.getUint32(16, false);
+      const height = view.getUint32(20, false);
+      if (width > 0 && height > 0) {
+        return { width, height, mimeType: "image/png" };
+      }
+    }
+
+    // 2. JPEG Header: FF D8
+    if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let offset = 2;
+      while (offset < bytes.length - 8) {
+        if (bytes[offset] !== 0xff) {
+          offset++;
+          continue;
+        }
+        const marker = bytes[offset + 1];
+        if (
+          (marker >= 0xc0 && marker <= 0xc3) ||
+          (marker >= 0xc5 && marker <= 0xc7) ||
+          (marker >= 0xc9 && marker <= 0xcb) ||
+          (marker >= 0xcd && marker <= 0xcf)
+        ) {
+          const height = view.getUint16(offset + 5, false);
+          const width = view.getUint16(offset + 7, false);
+          if (width > 0 && height > 0) {
+            return { width, height, mimeType: "image/jpeg" };
+          }
+        }
+        const length = view.getUint16(offset + 2, false);
+        offset += 2 + length;
+      }
+    }
+
+    // 3. WebP Header: RIFF .... WEBP
+    if (
+      bytes.length >= 30 &&
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    ) {
+      const chunkType = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+      if (chunkType === "VP8 ") {
+        const width = view.getUint16(26, true) & 0x3fff;
+        const height = view.getUint16(28, true) & 0x3fff;
+        if (width > 0 && height > 0) {
+          return { width, height, mimeType: "image/webp" };
+        }
+      } else if (chunkType === "VP8L") {
+        const b1 = bytes[21];
+        const b2 = bytes[22];
+        const b3 = bytes[23];
+        const b4 = bytes[24];
+        const width = 1 + (((b2 & 0x3f) << 8) | b1);
+        const height = 1 + (((b4 & 0x0f) << 10) | (b3 << 2) | ((b2 & 0xc0) >> 6));
+        if (width > 0 && height > 0) {
+          return { width, height, mimeType: "image/webp" };
+        }
+      } else if (chunkType === "VP8X") {
+        const width = 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16));
+        const height = 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16));
+        if (width > 0 && height > 0) {
+          return { width, height, mimeType: "image/webp" };
+        }
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+
+  return null;
+}
+
+/**
  * Inspects a local media file or blob with Mediabunny and returns a typed result.
  */
 export async function inspectMediaFile(
@@ -41,6 +161,43 @@ export async function inspectMediaFile(
     };
   }
 
+  // Check if file is an image (.png, .jpg, .jpeg, .webp, etc.)
+  const isImageHint =
+    file.type.startsWith("image/") ||
+    ("name" in file && /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test((file as File).name));
+
+  if (isImageHint) {
+    const imgInfo = await inspectImageDimensions(file);
+    if (imgInfo) {
+      return {
+        status: "ready",
+        metadata: {
+          containerFormat: "IMAGE",
+          mimeType: imgInfo.mimeType,
+          duration: 5, // default clip duration when dropped on a video track, freely trimmable/extendable
+          videoTracks: [
+            {
+              trackNumber: 1,
+              codec: "image",
+              displayWidth: imgInfo.width,
+              displayHeight: imgInfo.height,
+              codedWidth: imgInfo.width,
+              codedHeight: imgInfo.height,
+              rotation: 0,
+            },
+          ],
+          audioTracks: [],
+          displayWidth: imgInfo.width,
+          displayHeight: imgInfo.height,
+          codedWidth: imgInfo.width,
+          codedHeight: imgInfo.height,
+          rotation: 0,
+          inspectedAt: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
   let input: ReturnType<typeof createMediaInput> | null = null;
 
   try {
@@ -52,6 +209,35 @@ export async function inspectMediaFile(
     }
 
     if (!canRead) {
+      const fallbackImg = await inspectImageDimensions(file);
+      if (fallbackImg) {
+        return {
+          status: "ready",
+          metadata: {
+            containerFormat: "IMAGE",
+            mimeType: fallbackImg.mimeType,
+            duration: 5,
+            videoTracks: [
+              {
+                trackNumber: 1,
+                codec: "image",
+                displayWidth: fallbackImg.width,
+                displayHeight: fallbackImg.height,
+                codedWidth: fallbackImg.width,
+                codedHeight: fallbackImg.height,
+                rotation: 0,
+              },
+            ],
+            audioTracks: [],
+            displayWidth: fallbackImg.width,
+            displayHeight: fallbackImg.height,
+            codedWidth: fallbackImg.width,
+            codedHeight: fallbackImg.height,
+            rotation: 0,
+            inspectedAt: new Date().toISOString(),
+          },
+        };
+      }
       return {
         status: "unsupported",
         error: "Media container or format is not supported.",
@@ -245,6 +431,35 @@ export async function inspectMediaFile(
     }
 
     if (err instanceof UnsupportedInputFormatError) {
+      const fallbackImg = await inspectImageDimensions(file);
+      if (fallbackImg) {
+        return {
+          status: "ready",
+          metadata: {
+            containerFormat: "IMAGE",
+            mimeType: fallbackImg.mimeType,
+            duration: 5,
+            videoTracks: [
+              {
+                trackNumber: 1,
+                codec: "image",
+                displayWidth: fallbackImg.width,
+                displayHeight: fallbackImg.height,
+                codedWidth: fallbackImg.width,
+                codedHeight: fallbackImg.height,
+                rotation: 0,
+              },
+            ],
+            audioTracks: [],
+            displayWidth: fallbackImg.width,
+            displayHeight: fallbackImg.height,
+            codedWidth: fallbackImg.width,
+            codedHeight: fallbackImg.height,
+            rotation: 0,
+            inspectedAt: new Date().toISOString(),
+          },
+        };
+      }
       return {
         status: "unsupported",
         error: "Media container or format is not supported by Content Studio.",

@@ -34,6 +34,7 @@ import type {
   TimelineTrack,
   TextOverlay,
   TimelineTransition,
+  TransitionParams,
   ClipKeyframe,
   KeyframeProperty,
   KeyframeInterpolation,
@@ -45,12 +46,18 @@ import {
   removeClip,
   removeTextOverlay,
   updateTextOverlay,
-  moveTextOverlay,
   createTextOverlay,
   addTransition,
   removeTransition,
   updateTransition,
+  getClipTimelineDuration,
+  setTrackAudioRole,
+  setTrackDucking,
 } from "../../lib/timeline/model.ts";
+import {
+  COLOR_PRESETS,
+  DEFAULT_COLOR_ADJUSTMENTS,
+} from "../../lib/color/colorPresets.ts";
 import {
   renameTrack,
   removeTrack,
@@ -60,6 +67,8 @@ import {
   toggleTrackHidden,
   toggleTrackSyncLock,
   detachAudio,
+  setClipSpeed,
+  insertFreezeFrameAtPlayhead,
 } from "../../lib/timeline/editingOperations.ts";
 import {
   TRANSITION_CATALOG,
@@ -68,7 +77,6 @@ import {
 } from "../../lib/transitions/transitionCatalog.ts";
 import {
   ANIMATION_PRESETS,
-  createClipAnimationPreset,
   applyPresetAsKeyframes,
 } from "../../lib/animation/animationPresets.ts";
 import {
@@ -79,6 +87,10 @@ import {
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { formatBytes } from "../../lib/projectValidation.ts";
 import { Button, Badge, PanelHeader } from "@/components/ui";
+import { Snowflake } from "lucide-react";
+import * as Slider from "@radix-ui/react-slider";
+import * as Switch from "@radix-ui/react-switch";
+import { applyCaptionStyleToAll } from "../../lib/transcription/captionGenerator.ts";
 
 export interface ClipInspectorProps {
   timeline: TimelineDocument;
@@ -175,6 +187,69 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function RadixSlider({
+  label,
+  value,
+  min = 0,
+  max = 100,
+  step = 1,
+  unit = "",
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  onChange: (val: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-cs-text-tertiary uppercase font-semibold">{label}</span>
+        <span className="font-mono text-cs-text-secondary">{value}{unit}</span>
+      </div>
+      <Slider.Root
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={([val]) => onChange(val)}
+        className="relative flex items-center select-none touch-none w-full h-4 cursor-pointer"
+      >
+        <Slider.Track className="bg-cs-border-default relative grow rounded-full h-1">
+          <Slider.Range className="absolute bg-cs-accent rounded-full h-full" />
+        </Slider.Track>
+        <Slider.Thumb className="block w-2.5 h-2.5 bg-white rounded-full shadow hover:scale-110 focus:outline-none" />
+      </Slider.Root>
+    </div>
+  );
+}
+
+function RadixSwitchField({
+  label,
+  checked,
+  onCheckedChange,
+}: {
+  label: string;
+  checked: boolean;
+  onCheckedChange: (c: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between py-1 cursor-pointer select-none">
+      <span className="text-xs text-cs-text-secondary">{label}</span>
+      <Switch.Root
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        className="w-8 h-4 bg-cs-border-default rounded-full relative data-[state=checked]:bg-cs-accent transition-colors focus:outline-none"
+      >
+        <Switch.Thumb className="block w-3 h-3 bg-white rounded-full transition-transform translate-x-0.5 data-[state=checked]:translate-x-4.5 will-change-transform shadow" />
+      </Switch.Root>
+    </label>
+  );
+}
+
 // ─── Selected Clip Inspector ──────────────────────────────────────────────────
 
 function ClipPanel({
@@ -190,10 +265,10 @@ function ClipPanel({
   currentTime: number;
   onTimelineChange: (t: TimelineDocument) => void;
 }) {
-  const [tab, setTab] = useState<"transform" | "audio" | "transitions" | "animation" | "info">("transform");
+  const [tab, setTab] = useState<"transform" | "color" | "audio" | "transitions" | "animation" | "info">("transform");
   const liveItem = liveAssets.get(clip.assetId);
   const asset = liveItem?.asset;
-  const clipDuration = (clip.sourceOut - clip.sourceIn) / (clip.speed || 1);
+  const clipDuration = getClipTimelineDuration(clip);
   const track = timeline.tracks.find((t) => t.id === clip.trackId);
   const isVideo = track?.type === "video";
 
@@ -238,7 +313,7 @@ function ClipPanel({
   // Keyframes management
   const [keyframeProp, setKeyframeProp] = useState<KeyframeProperty>("opacity");
   const [keyframeVal, setKeyframeVal] = useState<number>(1);
-  const [keyframeInterp, setKeyframeInterp] = useState<KeyframeInterpolation>("ease-in-out");
+  const [keyframeInterp] = useState<KeyframeInterpolation>("ease-in-out");
 
   const handleAddKeyframeAtPlayhead = () => {
     const offset = Math.max(0, Math.min(clipDuration, currentTime - clip.startTime));
@@ -295,13 +370,12 @@ function ClipPanel({
 
         {/* Navigation Tabs */}
         <div className="flex gap-1 mt-3 bg-cs-bg-base p-0.5 rounded border border-cs-border-subtle text-[11px]">
-          {(["transform", "audio", "transitions", "animation", "info"] as const).map((t) => (
+          {(["transform", "color", "audio", "transitions", "animation", "info"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`flex-1 py-1 rounded capitalize font-medium transition-colors ${
-                tab === t ? "bg-cs-bg-active text-cs-text-primary shadow-xs" : "text-cs-text-tertiary hover:text-cs-text-primary"
-              }`}
+              className={`flex-1 py-1 rounded capitalize font-medium transition-colors ${tab === t ? "bg-cs-bg-active text-cs-text-primary shadow-xs" : "text-cs-text-tertiary hover:text-cs-text-primary"
+                }`}
             >
               {t === "transform" ? "Motion" : t}
             </button>
@@ -313,6 +387,85 @@ function ClipPanel({
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {tab === "transform" && (
           <>
+            {/* Framing & Transform Mode */}
+            {isVideo && (
+              <div className="flex flex-col gap-2 p-2.5 rounded bg-cs-bg-base border border-cs-border-subtle">
+                <SectionLabel>Framing (Aspect Fit)</SectionLabel>
+                <div className="flex gap-1.5">
+                  {(["fit", "fill", "blur-bg"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => patchClip({ fitMode: m })}
+                      className={`flex-1 py-1 rounded text-xs capitalize font-medium border transition-colors ${(clip.fitMode || "fit") === m
+                        ? "bg-cs-accent text-white border-cs-accent"
+                        : "bg-cs-bg-elevated border-cs-border-default text-cs-text-secondary hover:text-white"
+                        }`}
+                    >
+                      {m === "blur-bg" ? "Blur BG" : m}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <RadixSwitchField
+                    label="Flip Horizontal"
+                    checked={!!clip.flipH}
+                    onCheckedChange={(c) => patchClip({ flipH: c })}
+                  />
+                  <RadixSwitchField
+                    label="Flip Vertical"
+                    checked={!!clip.flipV}
+                    onCheckedChange={(c) => patchClip({ flipV: c })}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Crop Sliders */}
+            {isVideo && (
+              <div className="flex flex-col gap-2 p-2.5 rounded bg-cs-bg-base border border-cs-border-subtle">
+                <SectionLabel>Crop Controls</SectionLabel>
+                <div className="grid grid-cols-2 gap-2">
+                  <RadixSlider
+                    label="Top"
+                    value={Math.round((clip.crop?.top || 0) * 100)}
+                    min={0}
+                    max={45}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patchClip({ crop: { ...(clip.crop || { top: 0, right: 0, bottom: 0, left: 0 }), top: v / 100 } })}
+                  />
+                  <RadixSlider
+                    label="Bottom"
+                    value={Math.round((clip.crop?.bottom || 0) * 100)}
+                    min={0}
+                    max={45}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patchClip({ crop: { ...(clip.crop || { top: 0, right: 0, bottom: 0, left: 0 }), bottom: v / 100 } })}
+                  />
+                  <RadixSlider
+                    label="Left"
+                    value={Math.round((clip.crop?.left || 0) * 100)}
+                    min={0}
+                    max={45}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patchClip({ crop: { ...(clip.crop || { top: 0, right: 0, bottom: 0, left: 0 }), left: v / 100 } })}
+                  />
+                  <RadixSlider
+                    label="Right"
+                    value={Math.round((clip.crop?.right || 0) * 100)}
+                    min={0}
+                    max={45}
+                    step={1}
+                    unit="%"
+                    onChange={(v) => patchClip({ crop: { ...(clip.crop || { top: 0, right: 0, bottom: 0, left: 0 }), right: v / 100 } })}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-2">
               <SectionLabel>Position</SectionLabel>
               <div className="grid grid-cols-2 gap-2">
@@ -377,62 +530,183 @@ function ClipPanel({
               </div>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <SectionLabel>Playback Speed</SectionLabel>
-              <div className="flex items-center gap-2">
-                {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
+            <div className="flex flex-col gap-3 p-3 rounded-lg bg-cs-bg-base/40 border border-cs-border-subtle">
+              <SectionLabel>Speed & Freeze</SectionLabel>
+              <RadixSlider
+                label="Playback Speed"
+                value={Number((clip.playbackRate ?? 1.0).toFixed(2))}
+                min={0.25}
+                max={4.0}
+                step={0.05}
+                unit="x"
+                onChange={(val) => {
+                  onTimelineChange(setClipSpeed(timeline, clip.id, val, { preservePitch: clip.preservePitch, ripple: true }));
+                }}
+              />
+              <div className="flex items-center gap-1.5">
+                {[0.25, 0.5, 1.0, 1.5, 2.0, 4.0].map((s) => (
                   <button
                     key={s}
-                    onClick={() => patchClip({ speed: s })}
-                    className={`flex-1 py-1 rounded text-[11px] font-mono border transition-colors ${
-                      (clip.speed ?? 1.0) === s
-                        ? "bg-cs-accent text-white border-cs-accent font-semibold"
-                        : "bg-cs-bg-base border-cs-border-default text-cs-text-secondary hover:text-cs-text-primary"
-                    }`}
+                    onClick={() => onTimelineChange(setClipSpeed(timeline, clip.id, s, { preservePitch: clip.preservePitch, ripple: true }))}
+                    className={`flex-1 py-1 rounded text-[11px] font-mono border transition-colors ${(clip.playbackRate ?? 1.0) === s
+                      ? "bg-cs-accent text-white border-cs-accent font-semibold"
+                      : "bg-cs-bg-base border-cs-border-default text-cs-text-secondary hover:text-cs-text-primary"
+                      }`}
                   >
                     {s}x
                   </button>
                 ))}
               </div>
+
+              <RadixSwitchField
+                label="Preserve Pitch"
+                checked={clip.preservePitch ?? true}
+                onCheckedChange={(checked) => {
+                  onTimelineChange(setClipSpeed(timeline, clip.id, clip.playbackRate ?? 1.0, { preservePitch: checked, ripple: false }));
+                }}
+              />
+
+              {isVideo && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={currentTime < clip.startTime || currentTime > clip.startTime + clipDuration}
+                  onClick={() => {
+                    onTimelineChange(insertFreezeFrameAtPlayhead(timeline, clip.id, currentTime));
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5"
+                >
+                  <Snowflake className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Freeze Frame at Playhead</span>
+                </Button>
+              )}
             </div>
 
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => patchClip({ transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1 }, speed: 1.0 })}
+              onClick={() => {
+                onTimelineChange(setClipSpeed(timeline, clip.id, 1.0, { preservePitch: true, ripple: true }));
+                patchClip({ transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1 } });
+              }}
             >
               Reset Motion to Default
             </Button>
           </>
         )}
 
+        {tab === "color" && (
+          <>
+            <div className="flex flex-col gap-3">
+              <SectionLabel>Color Preset</SectionLabel>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(["none", "vivid", "warm", "cool", "bw", "cinematic"] as const).map((presetKey) => (
+                  <button
+                    key={presetKey}
+                    onClick={() => patchClip({ color: { ...COLOR_PRESETS[presetKey] } })}
+                    className={`h-7 px-2 rounded text-xs font-medium border capitalize transition-colors ${clip.color?.presetId === presetKey
+                      ? "bg-cs-accent text-white border-cs-accent"
+                      : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+                      }`}
+                  >
+                    {presetKey === "bw" ? "B&W" : presetKey}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 p-2.5 rounded bg-cs-bg-base border border-cs-border-subtle">
+              <SectionLabel>Adjustments</SectionLabel>
+              <RadixSlider
+                label="Brightness"
+                value={clip.color?.brightness ?? 0}
+                min={-100}
+                max={100}
+                step={1}
+                onChange={(v) => patchClip({ color: { ...(clip.color ?? DEFAULT_COLOR_ADJUSTMENTS), brightness: v, presetId: "none" } })}
+              />
+              <RadixSlider
+                label="Contrast"
+                value={clip.color?.contrast ?? 0}
+                min={-100}
+                max={100}
+                step={1}
+                onChange={(v) => patchClip({ color: { ...(clip.color ?? DEFAULT_COLOR_ADJUSTMENTS), contrast: v, presetId: "none" } })}
+              />
+              <RadixSlider
+                label="Saturation"
+                value={clip.color?.saturation ?? 0}
+                min={-100}
+                max={100}
+                step={1}
+                onChange={(v) => patchClip({ color: { ...(clip.color ?? DEFAULT_COLOR_ADJUSTMENTS), saturation: v, presetId: "none" } })}
+              />
+              <RadixSlider
+                label="Exposure"
+                value={clip.color?.exposure ?? 0}
+                min={-100}
+                max={100}
+                step={1}
+                onChange={(v) => patchClip({ color: { ...(clip.color ?? DEFAULT_COLOR_ADJUSTMENTS), exposure: v, presetId: "none" } })}
+              />
+              <RadixSlider
+                label="Temperature (Cool ↔ Warm)"
+                value={clip.color?.temperature ?? 0}
+                min={-100}
+                max={100}
+                step={1}
+                onChange={(v) => patchClip({ color: { ...(clip.color ?? DEFAULT_COLOR_ADJUSTMENTS), temperature: v, presetId: "none" } })}
+              />
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => patchClip({ color: { ...DEFAULT_COLOR_ADJUSTMENTS } })}
+            >
+              Reset Color to Default
+            </Button>
+          </>
+        )}
+
         {tab === "audio" && (
           <>
-            <div className="flex flex-col gap-2">
-              <SectionLabel>Clip Volume</SectionLabel>
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
+            <div className="flex flex-col gap-3">
+              <SectionLabel>Clip Audio & Fades</SectionLabel>
+              <RadixSlider
+                label="Volume Gain"
+                value={Math.round((clip.volume ?? 1) * 100)}
+                min={0}
+                max={200}
+                step={5}
+                unit="%"
+                onChange={(v) => patchClip({ volume: v / 100 })}
+              />
+              <RadixSwitchField
+                label="Mute Audio"
+                checked={!!clip.muted}
+                onCheckedChange={(c) => patchClip({ muted: c })}
+              />
+              <div className="grid grid-cols-2 gap-3 mt-1">
+                <RadixSlider
+                  label="Fade In"
+                  value={clip.fadeIn || 0}
                   min={0}
-                  max={2}
-                  step={0.05}
-                  value={clip.volume}
-                  onChange={(e) => patchClip({ volume: parseFloat(e.target.value) })}
-                  className="w-full h-1.5 bg-cs-bg-base rounded appearance-none cursor-pointer accent-cs-accent"
+                  max={5}
+                  step={0.1}
+                  unit="s"
+                  onChange={(v) => patchClip({ fadeIn: v })}
                 />
-                <span className="text-xs font-mono text-cs-text-primary w-10 text-right">
-                  {Math.round(clip.volume * 100)}%
-                </span>
+                <RadixSlider
+                  label="Fade Out"
+                  value={clip.fadeOut || 0}
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  unit="s"
+                  onChange={(v) => patchClip({ fadeOut: v })}
+                />
               </div>
-              <label className="flex items-center gap-2 mt-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={clip.muted}
-                  onChange={(e) => patchClip({ muted: e.target.checked })}
-                  className="h-3.5 w-3.5 rounded border-cs-border-default accent-cs-accent"
-                />
-                <span className="text-xs text-cs-text-secondary">Mute clip audio</span>
-              </label>
             </div>
 
             {isVideo && (
@@ -444,7 +718,7 @@ function ClipPanel({
                 <Button variant="secondary" size="sm" onClick={handleDetachAudio} className="w-full">
                   Detach Audio to Dedicated Track
                 </Button>
-                {clip.embeddedAudioDisabled && (
+                {clip.audioDetached && (
                   <Badge variant="warning">Embedded source audio is muted (detached)</Badge>
                 )}
               </div>
@@ -700,17 +974,15 @@ function OverlayPanel({
         <div className="flex gap-1">
           <button
             onClick={() => patch({ overlayType: "title" })}
-            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-              !isCaption ? "bg-cs-accent text-white" : "bg-cs-bg-base text-cs-text-secondary border border-cs-border-subtle"
-            }`}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${!isCaption ? "bg-cs-accent text-white" : "bg-cs-bg-base text-cs-text-secondary border border-cs-border-subtle"
+              }`}
           >
             Title
           </button>
           <button
             onClick={() => patch({ overlayType: "caption" })}
-            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-              isCaption ? "bg-cs-accent text-white" : "bg-cs-bg-base text-cs-text-secondary border border-cs-border-subtle"
-            }`}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${isCaption ? "bg-cs-accent text-white" : "bg-cs-bg-base text-cs-text-secondary border border-cs-border-subtle"
+              }`}
           >
             Caption
           </button>
@@ -785,11 +1057,10 @@ function OverlayPanel({
                     patch({ preset: p, backgroundColor: "rgba(0, 0, 0, 0.72)", strokeColor: "#000000", strokeWidth: 1.5 });
                   }
                 }}
-                className={`flex-1 py-1 rounded text-xs capitalize font-medium border transition-colors ${
-                  overlay.preset === p || (!overlay.preset && p === "clean")
-                    ? "bg-cs-accent text-white border-cs-accent"
-                    : "bg-cs-bg-base border-cs-border-default text-cs-text-secondary"
-                }`}
+                className={`flex-1 py-1 rounded text-xs capitalize font-medium border transition-colors ${overlay.preset === p || (!overlay.preset && p === "clean")
+                  ? "bg-cs-accent text-white border-cs-accent"
+                  : "bg-cs-bg-base border-cs-border-default text-cs-text-secondary"
+                  }`}
               >
                 {p}
               </button>
@@ -841,9 +1112,8 @@ function OverlayPanel({
                 <button
                   key={al}
                   onClick={() => patch({ align: al })}
-                  className={`flex-1 rounded text-xs capitalize ${
-                    overlay.align === al ? "bg-cs-accent text-white" : "bg-cs-bg-base border border-cs-border-default text-cs-text-secondary"
-                  }`}
+                  className={`flex-1 rounded text-xs capitalize ${overlay.align === al ? "bg-cs-accent text-white" : "bg-cs-bg-base border border-cs-border-default text-cs-text-secondary"
+                    }`}
                 >
                   {al[0].toUpperCase()}
                 </button>
@@ -852,12 +1122,48 @@ function OverlayPanel({
           </div>
         </div>
 
+        {/* Active Word Highlight Color & Stroke Width */}
+        {isCaption && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[10px] text-cs-text-tertiary uppercase tracking-wider font-semibold">Karaoke Word Color</label>
+              <input
+                type="color"
+                value={overlay.activeWordColor || "#facc15"}
+                onChange={(e) => patch({ activeWordColor: e.target.value })}
+                className="h-7 w-full rounded bg-cs-bg-base border border-cs-border-default cursor-pointer"
+              />
+            </div>
+            <RadixSlider
+              label="Stroke Outline"
+              value={overlay.strokeWidth || 0}
+              min={0}
+              max={8}
+              step={0.5}
+              unit="px"
+              onChange={(v) => patch({ strokeWidth: v, strokeColor: v > 0 ? (overlay.strokeColor || "#000000") : undefined })}
+            />
+          </div>
+        )}
+
+        {/* Apply Style to All Captions */}
+        {isCaption && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onTimelineChange(applyCaptionStyleToAll(timeline, overlay))}
+            className="w-full text-xs font-medium"
+          >
+            ✨ Apply Style to All Captions
+          </Button>
+        )}
+
         {/* Animation */}
         <div className="flex flex-col gap-0.5">
           <label className="text-[10px] text-cs-text-tertiary uppercase tracking-wider font-semibold">Text Animation</label>
           <select
             value={overlay.animationPreset || "none"}
-            onChange={(e) => patch({ animationPreset: e.target.value === "none" ? undefined : (e.target.value as any) })}
+            onChange={(e) => patch({ animationPreset: e.target.value === "none" ? undefined : (e.target.value as AnimationPresetId) })}
             className="h-7 px-2 text-xs rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
           >
             <option value="none">None (Static Text)</option>
@@ -902,8 +1208,8 @@ function TransitionPanel({
     onTimelineChange(updateTransition(timeline, transition.id, patchData));
   }
 
-  function patchParam(key: string, val: any) {
-    patch({ params: { ...transition.params, [key]: val } });
+  function patchParam(key: string, val: unknown) {
+    patch({ params: { ...transition.params, [key]: val } as TransitionParams });
   }
 
   return (
@@ -932,9 +1238,8 @@ function TransitionPanel({
               <button
                 key={al}
                 onClick={() => patch({ alignment: al })}
-                className={`flex-1 rounded text-xs capitalize ${
-                  transition.alignment === al ? "bg-cs-accent text-white" : "bg-cs-bg-base border border-cs-border-default text-cs-text-secondary"
-                }`}
+                className={`flex-1 rounded text-xs capitalize ${transition.alignment === al ? "bg-cs-accent text-white" : "bg-cs-bg-base border border-cs-border-default text-cs-text-secondary"
+                  }`}
               >
                 {al}
               </button>
@@ -948,7 +1253,7 @@ function TransitionPanel({
             {p.type === "color" && (
               <input
                 type="color"
-                value={(transition.params as any)?.[p.name] || p.default}
+                value={String((transition.params as Record<string, unknown> | undefined)?.[p.name] ?? p.default)}
                 onChange={(e) => patchParam(p.name, e.target.value)}
                 className="h-7 w-full rounded bg-cs-bg-base border border-cs-border-default cursor-pointer"
               />
@@ -956,7 +1261,7 @@ function TransitionPanel({
             {p.type === "number" && (
               <NumberField
                 label=""
-                value={(transition.params as any)?.[p.name] ?? p.default}
+                value={Number((transition.params as Record<string, unknown> | undefined)?.[p.name] ?? p.default)}
                 min={p.min}
                 max={p.max}
                 step={p.step}
@@ -965,7 +1270,7 @@ function TransitionPanel({
             )}
             {p.type === "select" && (
               <select
-                value={(transition.params as any)?.[p.name] || p.default}
+                value={String((transition.params as Record<string, unknown> | undefined)?.[p.name] ?? p.default)}
                 onChange={(e) => patchParam(p.name, e.target.value)}
                 className="h-7 px-2 text-xs rounded bg-cs-bg-base border border-cs-border-default text-cs-text-primary"
               >
@@ -1016,7 +1321,6 @@ function SequenceOverviewPanel({
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const captionCues = timeline.textOverlays.filter((o) => o.overlayType === "caption");
-  const titleOverlays = timeline.textOverlays.filter((o) => o.overlayType !== "caption");
 
   const handleExportSrt = () => {
     const srt = serializeTextOverlaysToSrt(captionCues);
@@ -1063,6 +1367,8 @@ function SequenceOverviewPanel({
         fontSize: 24,
         color: "#ffffff",
         align: "center",
+        presetId: "classic",
+        activeWordColor: "#facc15",
         overlayType: "caption",
         preset: "clean",
         backgroundColor: "rgba(0,0,0,0.75)",
@@ -1089,6 +1395,44 @@ function SequenceOverviewPanel({
         <span className="text-xs text-cs-text-secondary mt-0.5">
           Select any clip, transition, or caption on the timeline to edit properties.
         </span>
+      </div>
+
+      {/* Sequence Framing & Aspect Ratio Selector */}
+      <div className="p-3 rounded-lg bg-cs-bg-base border border-cs-border-subtle flex flex-col gap-2.5">
+        <SectionLabel>Sequence Framing & Aspect Ratio</SectionLabel>
+        <div className="grid grid-cols-4 gap-1.5">
+          {(["16:9", "9:16", "1:1", "4:5"] as const).map((ratio) => (
+            <button
+              key={ratio}
+              onClick={() => onTimelineChange({
+                ...timeline,
+                settings: {
+                  ...timeline.settings,
+                  targetAspectRatio: ratio,
+                },
+              })}
+              className={`py-1.5 rounded text-xs font-mono font-semibold border transition-colors ${(timeline.settings?.targetAspectRatio || "16:9") === ratio
+                ? "bg-cs-accent text-white border-cs-accent"
+                : "bg-cs-bg-elevated border-cs-border-default text-cs-text-secondary hover:text-white"
+                }`}
+            >
+              {ratio}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between text-[11px] text-cs-text-tertiary pt-1">
+          <span>
+            Resolution:{" "}
+            {(timeline.settings?.targetAspectRatio || "16:9") === "9:16"
+              ? "1080x1920"
+              : (timeline.settings?.targetAspectRatio || "16:9") === "1:1"
+                ? "1080x1080"
+                : (timeline.settings?.targetAspectRatio || "16:9") === "4:5"
+                  ? "1080x1350"
+                  : "1920x1080"}
+          </span>
+          <span>FPS: {timeline.timebase?.fps || 30}</span>
+        </div>
       </div>
 
       {/* Captions Section */}
@@ -1221,18 +1565,16 @@ function TrackPanel({
         <div className="grid grid-cols-2 gap-1.5">
           <button
             onClick={() => onTimelineChange(toggleTrackMute(timeline, track.id))}
-            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${
-              track.muted ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
-            }`}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${track.muted ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
+              }`}
           >
             <span>Mute</span>
             <span>{track.muted ? "ON" : "OFF"}</span>
           </button>
           <button
             onClick={() => onTimelineChange(toggleTrackSolo(timeline, track.id))}
-            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${
-              track.solo ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
-            }`}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${track.solo ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
+              }`}
           >
             <span>Solo</span>
             <span>{track.solo ? "ON" : "OFF"}</span>
@@ -1240,9 +1582,8 @@ function TrackPanel({
           {isVideo && (
             <button
               onClick={() => onTimelineChange(toggleTrackHidden(timeline, track.id))}
-              className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${
-                track.hidden ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
-              }`}
+              className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${track.hidden ? "bg-amber-500/15 border-amber-500/40 text-amber-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
+                }`}
             >
               <span>Hidden</span>
               <span>{track.hidden ? "YES" : "NO"}</span>
@@ -1250,22 +1591,88 @@ function TrackPanel({
           )}
           <button
             onClick={() => onTimelineChange(toggleTrackSyncLock(timeline, track.id))}
-            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${
-              track.syncLocked !== false ? "bg-sky-500/15 border-sky-500/40 text-sky-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
-            }`}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border ${track.syncLocked !== false ? "bg-sky-500/15 border-sky-500/40 text-sky-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
+              }`}
           >
             <span>Sync-Lock</span>
             <span>{track.syncLocked !== false ? "ON" : "OFF"}</span>
           </button>
           <button
             onClick={() => onTimelineChange(toggleTrackLock(timeline, track.id))}
-            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border col-span-2 ${
-              track.locked ? "bg-red-500/15 border-red-500/40 text-red-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
-            }`}
+            className={`h-7 px-2 rounded text-xs font-medium flex items-center justify-between border col-span-2 ${track.locked ? "bg-red-500/15 border-red-500/40 text-red-300" : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary"
+              }`}
           >
             <span>Lock Track Against Edits</span>
             <span>{track.locked ? "LOCKED" : "UNLOCKED"}</span>
           </button>
+        </div>
+      </div>
+
+      {/* Audio Role & Auto-Ducking Controls */}
+      <div className="flex flex-col gap-2 p-2.5 rounded bg-cs-bg-base border border-cs-border-subtle">
+        <SectionLabel>Audio Role</SectionLabel>
+        <div className="grid grid-cols-2 gap-1.5">
+          {(["dialogue", "music", "sfx", "general"] as const).map((role) => (
+            <button
+              key={role}
+              onClick={() => onTimelineChange(setTrackAudioRole(timeline, track.id, role))}
+              className={`h-7 px-2 rounded text-xs font-medium border capitalize transition-colors ${track.audioRole === role
+                ? "bg-cs-accent text-white border-cs-accent"
+                : "bg-cs-bg-surface border-cs-border-subtle text-cs-text-secondary hover:text-cs-text-primary"
+                }`}
+            >
+              {role}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-2 flex flex-col gap-2">
+          <RadixSwitchField
+            label="Auto-Ducking (Duck Under Dialogue)"
+            checked={!!track.ducking?.enabled}
+            onCheckedChange={(enabled) =>
+              onTimelineChange(setTrackDucking(timeline, track.id, { enabled }))
+            }
+          />
+          {track.ducking?.enabled && (
+            <div className="flex flex-col gap-2 pt-1 border-t border-cs-border-subtle">
+              <RadixSlider
+                label="Reduction"
+                value={track.ducking.reductionDb}
+                min={-30}
+                max={-3}
+                step={1}
+                unit="dB"
+                onChange={(v) =>
+                  onTimelineChange(setTrackDucking(timeline, track.id, { reductionDb: v }))
+                }
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <RadixSlider
+                  label="Attack"
+                  value={track.ducking.attackMs}
+                  min={20}
+                  max={1000}
+                  step={10}
+                  unit="ms"
+                  onChange={(v) =>
+                    onTimelineChange(setTrackDucking(timeline, track.id, { attackMs: v }))
+                  }
+                />
+                <RadixSlider
+                  label="Release"
+                  value={track.ducking.releaseMs}
+                  min={50}
+                  max={2000}
+                  step={25}
+                  unit="ms"
+                  onChange={(v) =>
+                    onTimelineChange(setTrackDucking(timeline, track.id, { releaseMs: v }))
+                  }
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -2,8 +2,8 @@ import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   createTimeline,
+  createClip,
   addClipToTrack,
-  addTextOverlay,
   getActiveClipAtTime,
 } from "../src/lib/timeline/model.ts";
 import {
@@ -24,27 +24,15 @@ describe("Content Studio Remediation Tests", () => {
 
     // Initial video clip
     const initialClip = {
+      ...createClip("asset-1", videoTrack.id, 0, 0, 10),
       id: "v1",
-      assetId: "asset-1",
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     };
     tl = addClipToTrack(tl, videoTrack.id, initialClip);
 
     // Initial audio clip
     const initialAudio = {
+      ...createClip("asset-1", audioTrack.id, 0, 0, 10),
       id: "a1",
-      assetId: "asset-1",
-      trackId: audioTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     };
     tl = addClipToTrack(tl, audioTrack.id, initialAudio);
 
@@ -78,24 +66,12 @@ describe("Content Studio Remediation Tests", () => {
 
     // Add 10s video and audio clips
     tl = addClipToTrack(tl, videoTrack.id, {
+      ...createClip("asset-1", videoTrack.id, 0, 0, 10),
       id: "v1",
-      assetId: "asset-1",
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     });
     tl = addClipToTrack(tl, audioTrack.id, {
+      ...createClip("asset-1", audioTrack.id, 0, 0, 10),
       id: "a1",
-      assetId: "asset-1",
-      trackId: audioTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     });
 
     // Overwrite from 3s to 6s (duration 3s)
@@ -123,26 +99,14 @@ describe("Content Studio Remediation Tests", () => {
 
     // v1 clip from 0 to 10
     tl = addClipToTrack(tl, v1.id, {
+      ...createClip("asset-v1", v1.id, 0, 0, 10),
       id: "c-v1",
-      assetId: "asset-v1",
-      trackId: v1.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     });
 
     // v2 clip from 0 to 10
     tl = addClipToTrack(tl, v2.id, {
+      ...createClip("asset-v2", v2.id, 0, 0, 10),
       id: "c-v2",
-      assetId: "asset-v2",
-      trackId: v2.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     });
 
     // Without hiding, top track is returned
@@ -172,14 +136,8 @@ describe("Content Studio Remediation Tests", () => {
     const v1 = tl.tracks.find((t) => t.type === "video")!;
 
     tl = addClipToTrack(tl, v1.id, {
+      ...createClip("asset-1", v1.id, 0, 0, 5),
       id: "c1",
-      assetId: "asset-1",
-      trackId: v1.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 5,
-      volume: 1,
-      muted: false,
     });
 
     // Mark track hidden
@@ -193,6 +151,7 @@ describe("Content Studio Remediation Tests", () => {
       asset: {
         id: "asset-1",
         name: "Test.mp4",
+        kind: "video",
         mediaType: "video",
         mimeType: "video/mp4",
         size: 1024,
@@ -221,13 +180,16 @@ describe("Content Studio Remediation Tests", () => {
       textBaseline: "",
       beginPath: () => recordedOps.push("beginPath"),
       roundRect: (x: number, y: number, w: number, h: number, r: number) => {
+        void r;
         recordedOps.push(`roundRect:x=${Math.round(x)},y=${Math.round(y)},w=${Math.round(w)},h=${Math.round(h)}`);
       },
       fill: () => recordedOps.push("fill"),
       fillText: (txt: string, x: number, y: number) => {
+        void x;
+        void y;
         recordedOps.push(`fillText:${txt}`);
       },
-      strokeText: () => {},
+      strokeText: () => { },
     } as unknown as CanvasRenderingContext2D;
 
     const overlay = {
@@ -240,6 +202,8 @@ describe("Content Studio Remediation Tests", () => {
       fontSize: 24,
       color: "#ffffff",
       align: "center" as const,
+      presetId: "classic" as const,
+      activeWordColor: "#facc15",
       overlayType: "caption" as const,
       preset: "clean" as const,
       boxWidthRatio: 0.5,

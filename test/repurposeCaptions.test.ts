@@ -120,6 +120,8 @@ describe("Repurpose Captions & Subtitle Serialization", () => {
         fontSize: 24,
         color: "#ffffff",
         align: "center",
+        presetId: "classic",
+        activeWordColor: "#facc15",
         overlayType: "caption",
       },
       {
@@ -132,6 +134,8 @@ describe("Repurpose Captions & Subtitle Serialization", () => {
         fontSize: 24,
         color: "#ffffff",
         align: "center",
+        presetId: "classic",
+        activeWordColor: "#facc15",
         overlayType: "caption",
       },
     ];
@@ -153,6 +157,8 @@ describe("Repurpose Captions & Subtitle Serialization", () => {
         fontSize: 24,
         color: "#ffffff",
         align: "center",
+        presetId: "classic",
+        activeWordColor: "#facc15",
         overlayType: "caption",
       },
     ];

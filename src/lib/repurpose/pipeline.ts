@@ -161,7 +161,8 @@ export async function runRepurposePipeline(
   }
 
   // 2. Process each valid asset across its FULL duration
-  for (let assetIdx = 0; assetIdx < totalAssets; assetIdx++) {
+  try {
+    for (let assetIdx = 0; assetIdx < totalAssets; assetIdx++) {
     if (signal?.aborted) {
       throw new DOMException("Repurposing analysis was cancelled by user.", "AbortError");
     }
@@ -408,4 +409,9 @@ export async function runRepurposePipeline(
     coverageReports,
     sourceTranscripts,
   };
+} finally {
+  if (!transcriptionEngine && asrEngine) {
+    asrEngine.dispose();
+  }
+}
 }

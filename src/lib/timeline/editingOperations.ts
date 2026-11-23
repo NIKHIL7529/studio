@@ -17,7 +17,10 @@ import type {
   TimelineMarker,
   TrackType,
 } from "../../types/timeline.ts";
-import { splitClip } from "./model.ts";
+import { splitClip, DEFAULT_TRACK_DUCKING } from "./model.ts";
+import { DEFAULT_COLOR_ADJUSTMENTS } from "../color/colorPresets.ts";
+
+export { moveClip, setClipSpeed, insertFreezeFrameAtPlayhead } from "./model.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -54,7 +57,7 @@ export function rippleTrimStart(
   options: RippleTrimOptions = { rippleSyncLocked: true }
 ): TimelineDocument {
   const found = findClipWithTrack(timeline, clipId);
-  if (!found) return timeline;
+  if (!found || found.track.locked) return timeline;
   const { clip, track } = found;
 
   if (newSourceIn >= clip.sourceOut) {
@@ -66,8 +69,9 @@ export function rippleTrimStart(
     throw new Error(`rippleTrimStart: newSourceIn (${newSourceIn}) must be >= 0`);
   }
 
-  const oldDuration = clip.sourceOut - clip.sourceIn;
-  const newDuration = clip.sourceOut - newSourceIn;
+  const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+  const oldDuration = (clip.sourceOut - clip.sourceIn) / rate;
+  const newDuration = (clip.sourceOut - newSourceIn) / rate;
   const durationDelta = newDuration - oldDuration; // negative if trimmed shorter, positive if extended
 
   // Determine affected track IDs
@@ -76,7 +80,7 @@ export function rippleTrimStart(
 
   if (options.rippleSyncLocked) {
     for (const t of timeline.tracks) {
-      if (t.syncLocked) affectedTrackIds.add(t.id);
+      if (t.syncLocked && !t.locked) affectedTrackIds.add(t.id);
     }
   }
 
@@ -85,7 +89,7 @@ export function rippleTrimStart(
   return {
     ...timeline,
     tracks: timeline.tracks.map((t) => {
-      if (!affectedTrackIds.has(t.id)) return t;
+      if (!affectedTrackIds.has(t.id) || t.locked) return t;
 
       const isCurrentTrack = t.id === track.id;
 
@@ -125,7 +129,7 @@ export function rippleTrimEnd(
   options: RippleTrimOptions = { rippleSyncLocked: true }
 ): TimelineDocument {
   const found = findClipWithTrack(timeline, clipId);
-  if (!found) return timeline;
+  if (!found || found.track.locked) return timeline;
   const { clip, track } = found;
 
   if (newSourceOut <= clip.sourceIn) {
@@ -134,8 +138,9 @@ export function rippleTrimEnd(
     );
   }
 
-  const oldDuration = clip.sourceOut - clip.sourceIn;
-  const newDuration = newSourceOut - clip.sourceIn;
+  const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+  const oldDuration = (clip.sourceOut - clip.sourceIn) / rate;
+  const newDuration = (newSourceOut - clip.sourceIn) / rate;
   const durationDelta = newDuration - oldDuration;
 
   const clipEndTime = clip.startTime + oldDuration;
@@ -145,14 +150,14 @@ export function rippleTrimEnd(
 
   if (options.rippleSyncLocked) {
     for (const t of timeline.tracks) {
-      if (t.syncLocked) affectedTrackIds.add(t.id);
+      if (t.syncLocked && !t.locked) affectedTrackIds.add(t.id);
     }
   }
 
   return {
     ...timeline,
     tracks: timeline.tracks.map((t) => {
-      if (!affectedTrackIds.has(t.id)) return t;
+      if (!affectedTrackIds.has(t.id) || t.locked) return t;
 
       const isCurrentTrack = t.id === track.id;
 
@@ -199,6 +204,7 @@ export function rollEdit(
   const leftFound = findClipWithTrack(timeline, leftClipId);
   const rightFound = findClipWithTrack(timeline, rightClipId);
   if (!leftFound || !rightFound) return timeline;
+  if (leftFound.track.locked || rightFound.track.locked) return timeline;
   if (leftFound.track.id !== rightFound.track.id) {
     throw new Error("rollEdit requires both clips to be on the same track");
   }
@@ -263,7 +269,7 @@ export function slipEdit(
   if (Math.abs(sourceOffset) < 0.0001) return timeline;
 
   const found = findClipWithTrack(timeline, clipId);
-  if (!found) return timeline;
+  if (!found || found.track.locked) return timeline;
   const clip = found.clip;
 
   const newSourceIn = clip.sourceIn + sourceOffset;
@@ -303,7 +309,7 @@ export function slideEdit(
   if (Math.abs(deltaTime) < 0.0001) return timeline;
 
   const found = findClipWithTrack(timeline, clipId);
-  if (!found) return timeline;
+  if (!found || found.track.locked) return timeline;
   const { clip, track } = found;
 
   const newClipStartTime = clip.startTime + deltaTime;
@@ -392,10 +398,12 @@ export function razorSplitAtPlayhead(
     for (const clip of track.clips) {
       if (targetClipId && clip.id !== targetClipId) continue;
 
-      const clipEnd = clip.startTime + (clip.sourceOut - clip.sourceIn);
+      const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+      const clipDuration = (clip.sourceOut - clip.sourceIn) / rate;
+      const clipEnd = clip.startTime + clipDuration;
       if (playheadTime > clip.startTime + 0.001 && playheadTime < clipEnd - 0.001) {
         const offsetIntoClip = playheadTime - clip.startTime;
-        const splitSourceTime = clip.sourceIn + offsetIntoClip;
+        const splitSourceTime = clip.sourceIn + offsetIntoClip * rate;
         const result = splitClip(doc, clip.id, splitSourceTime);
         if (result) {
           doc = result;
@@ -411,6 +419,7 @@ export function razorSplitAtPlayhead(
 
 /**
  * Lift removes selected clips leaving the empty gaps intact.
+ * Clips on locked tracks are preserved.
  */
 export function liftClips(
   timeline: TimelineDocument,
@@ -419,15 +428,19 @@ export function liftClips(
   const idsToRemove = new Set(clipIds);
   return {
     ...timeline,
-    tracks: timeline.tracks.map((t) => ({
-      ...t,
-      clips: t.clips.filter((c) => !idsToRemove.has(c.id)),
-    })),
+    tracks: timeline.tracks.map((t) => {
+      if (t.locked) return t;
+      return {
+        ...t,
+        clips: t.clips.filter((c) => !idsToRemove.has(c.id)),
+      };
+    }),
   };
 }
 
 /**
  * Ripple delete removes selected clips and ripples subsequent clips to close the gaps.
+ * Clips on locked tracks are preserved, and locked tracks are never shifted.
  */
 export function rippleDeleteClips(
   timeline: TimelineDocument,
@@ -442,7 +455,7 @@ export function rippleDeleteClips(
   const clipDetails: { clip: TimelineClip; track: TimelineTrack }[] = [];
   for (const id of clipIds) {
     const found = findClipWithTrack(current, id);
-    if (found) clipDetails.push(found);
+    if (found && !found.track.locked) clipDetails.push(found);
   }
 
   // Sort descending by startTime
@@ -457,13 +470,14 @@ export function rippleDeleteClips(
 
     if (syncLockedTracks) {
       for (const t of current.tracks) {
-        if (t.syncLocked) affectedTrackIds.add(t.id);
+        if (t.syncLocked && !t.locked) affectedTrackIds.add(t.id);
       }
     }
 
     current = {
       ...current,
       tracks: current.tracks.map((t) => {
+        if (t.locked) return t;
         const isCurrentTrack = t.id === track.id;
 
         // Remove clip if this is the target track
@@ -492,9 +506,25 @@ export function rippleDeleteClips(
   return current;
 }
 
-
+/**
+ * Ripple deletes a single clip by clipId, shifting subsequent clips left.
+ */
+export function rippleDeleteClip(
+  timeline: TimelineDocument,
+  clipId: string,
+  syncLockedTracks: boolean = true
+): TimelineDocument {
+  const found = findClipWithTrack(timeline, clipId);
+  if (!found || found.track.locked) return timeline;
+  return rippleDeleteClips(timeline, [clipId], syncLockedTracks);
+}
 
 // ─── Detach Audio Operation ───────────────────────────────────────────────────
+
+export type DetachAudioResult = TimelineDocument & {
+  timeline: TimelineDocument;
+  audioClipId: string;
+};
 
 /**
  * Detaches audio from a video clip by creating a linked audio clip on an audio track.
@@ -504,9 +534,9 @@ export function detachAudio(
   timeline: TimelineDocument,
   videoClipId: string,
   options: { disableEmbeddedAudio?: boolean; targetAudioTrackId?: string } = {}
-): { timeline: TimelineDocument; audioClipId: string } | null {
+): DetachAudioResult | null {
   const found = findClipWithTrack(timeline, videoClipId);
-  if (!found || found.track.type !== "video") return null;
+  if (!found || found.track.type !== "video" || found.track.locked) return null;
 
   const { clip: videoClip } = found;
   const disableEmbedded = options.disableEmbeddedAudio ?? true;
@@ -516,7 +546,9 @@ export function detachAudio(
   // Find or create suitable audio track
   let targetAudioTrack: TimelineTrack | undefined;
   if (options.targetAudioTrackId) {
-    targetAudioTrack = current.tracks.find((t) => t.id === options.targetAudioTrackId && t.type === "audio");
+    targetAudioTrack = current.tracks.find(
+      (t) => t.id === options.targetAudioTrackId && t.type === "audio" && !t.locked
+    );
   }
   if (!targetAudioTrack) {
     targetAudioTrack = current.tracks.find((t) => t.type === "audio" && !t.locked);
@@ -524,48 +556,72 @@ export function detachAudio(
   if (!targetAudioTrack) {
     // Create new audio track
     const newTrackId = crypto.randomUUID();
-    targetAudioTrack = {
+    const createdAudioTrack: TimelineTrack = {
       id: newTrackId,
       type: "audio",
       name: `Audio ${current.tracks.filter((t) => t.type === "audio").length + 1}`,
       order: current.tracks.length,
+      locked: false,
       muted: false,
+      hidden: false,
       clips: [],
+      audioRole: "general",
+      ducking: { ...DEFAULT_TRACK_DUCKING },
     };
-    current.tracks.push(targetAudioTrack);
+    current.tracks.push(createdAudioTrack);
+    targetAudioTrack = createdAudioTrack;
   }
 
+  const assignedAudioTrack = targetAudioTrack!;
   const audioClipId = crypto.randomUUID();
   const audioClip: TimelineClip = {
     id: audioClipId,
     assetId: videoClip.assetId,
-    trackId: targetAudioTrack.id,
+    trackId: assignedAudioTrack.id,
     startTime: videoClip.startTime,
     sourceIn: videoClip.sourceIn,
     sourceOut: videoClip.sourceOut,
     volume: videoClip.volume,
     muted: false,
-    speed: videoClip.speed,
+    fitMode: videoClip.fitMode || "fit",
+    crop: videoClip.crop ? { ...videoClip.crop } : { top: 0, right: 0, bottom: 0, left: 0 },
+    flipH: videoClip.flipH ?? false,
+    flipV: videoClip.flipV ?? false,
+    fadeIn: videoClip.fadeIn ?? 0,
+    fadeOut: videoClip.fadeOut ?? 0,
+    audioDetached: false,
+    playbackRate: videoClip.playbackRate,
+    preservePitch: videoClip.preservePitch,
+    freezeFrameSourceTime: null,
     linkedClipId: videoClip.id,
+    color: videoClip.color ? { ...videoClip.color } : { ...DEFAULT_COLOR_ADJUSTMENTS },
   };
 
-  targetAudioTrack.clips.push(audioClip);
+  assignedAudioTrack.clips.push(audioClip);
 
-  // Update video clip: link to audio clip, and set embeddedAudioDisabled
+  // Update video clip: link to audio clip, and set audioDetached = true
   for (const track of current.tracks) {
     for (let i = 0; i < track.clips.length; i++) {
       if (track.clips[i].id === videoClipId) {
         track.clips[i] = {
           ...track.clips[i],
           linkedClipId: audioClipId,
-          embeddedAudioDisabled: disableEmbedded,
+          audioDetached: disableEmbedded,
         };
       }
     }
   }
 
-  return { timeline: current, audioClipId };
+  const result: DetachAudioResult = {
+    ...current,
+    timeline: current,
+    audioClipId,
+  };
+
+  return result;
 }
+
+export const detachAudioFromClip = detachAudio;
 
 // ─── Close Gap ────────────────────────────────────────────────────────────────
 
@@ -687,7 +743,18 @@ export function insertEdit(
     sourceOut,
     volume: 1,
     muted: false,
+    fitMode: "fit",
+    crop: { top: 0, right: 0, bottom: 0, left: 0 },
+    flipH: false,
+    flipV: false,
+    fadeIn: 0,
+    fadeOut: 0,
+    audioDetached: false,
+    playbackRate: 1.0,
+    preservePitch: true,
+    freezeFrameSourceTime: null,
     linkedClipId: audioClipId,
+    color: { ...DEFAULT_COLOR_ADJUSTMENTS },
   };
 
   const newAudioClip: TimelineClip | null = audioTrackId && audioClipId ? {
@@ -699,7 +766,18 @@ export function insertEdit(
     sourceOut,
     volume: 1,
     muted: false,
+    fitMode: "fit",
+    crop: { top: 0, right: 0, bottom: 0, left: 0 },
+    flipH: false,
+    flipV: false,
+    fadeIn: 0,
+    fadeOut: 0,
+    audioDetached: false,
+    playbackRate: 1.0,
+    preservePitch: true,
+    freezeFrameSourceTime: null,
     linkedClipId: videoClipId,
+    color: { ...DEFAULT_COLOR_ADJUSTMENTS },
   } : null;
 
   return {
@@ -793,7 +871,18 @@ function overwriteTrackClips(
     sourceOut,
     volume: 1,
     muted: false,
+    fitMode: "fit",
+    crop: { top: 0, right: 0, bottom: 0, left: 0 },
+    flipH: false,
+    flipV: false,
+    fadeIn: 0,
+    fadeOut: 0,
+    audioDetached: false,
+    playbackRate: 1.0,
+    preservePitch: true,
+    freezeFrameSourceTime: null,
     linkedClipId,
+    color: { ...DEFAULT_COLOR_ADJUSTMENTS },
   };
   newClips.push(placedClip);
   return newClips;
@@ -836,14 +925,14 @@ export function overwriteEdit(
 
   const updatedAudioClips = audioTrack
     ? overwriteTrackClips(
-        audioTrack,
-        assetId,
-        sourceIn,
-        sourceOut,
-        overwriteTime,
-        audioClipId!,
-        videoClipId
-      )
+      audioTrack,
+      assetId,
+      sourceIn,
+      sourceOut,
+      overwriteTime,
+      audioClipId!,
+      videoClipId
+    )
     : null;
 
   return {
@@ -960,6 +1049,8 @@ export function addTrack(
     solo: false,
     syncLocked: true,
     clips: [],
+    audioRole: type === "video" ? "dialogue" : "general",
+    ducking: { ...DEFAULT_TRACK_DUCKING },
   };
 
   return {
@@ -1105,6 +1196,21 @@ export function removeMarker(
     ...timeline,
     markers: timeline.markers.filter((m) => m.id !== markerId),
   };
+}
+
+export function moveMarker(
+  timeline: TimelineDocument,
+  markerId: string,
+  newTime: number
+): TimelineDocument {
+  return updateMarker(timeline, markerId, { time: Math.max(0, newTime) });
+}
+
+export function deleteMarker(
+  timeline: TimelineDocument,
+  markerId: string
+): TimelineDocument {
+  return removeMarker(timeline, markerId);
 }
 
 export function findNearestMarker(

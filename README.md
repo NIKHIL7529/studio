@@ -29,13 +29,18 @@ Content Studio lets creators import their own videos, inspect and edit footage a
 | **Source Media References** | ✅ Implemented | Zero-copy referencing: handles stored in IndexedDB, referenced via opaque UUIDs. Original files are never duplicated into workspace, OPFS, or IndexedDB. |
 | **Media Relinking & Fingerprints** | ✅ Implemented | Missing/offline source detection, bounded SHA-256 head/tail fingerprinting, metadata change warnings, and automated re-inspection upon relinking. |
 | **Dual-Monitor Editing** | ✅ Implemented | Professional two-up monitor architecture: Source Monitor (`SourceMonitor.tsx`) for inspecting assets and setting In/Out markers, paired with Program Monitor (`TimelinePreview.tsx`) for timeline playback. |
-| **Multi-track Timeline Editor** | ✅ Implemented | Multi-track video and audio tracks, clip trimming (`sourceIn`/`sourceOut`), split at playhead (`S`), clip drag-and-drop, magnet snapping, zoom (20–500 px/s), and bounded undo/redo (50 states). |
+| **Multi-track Timeline Editor** | ✅ Implemented | Multi-track video and audio tracks, clip trimming (`sourceIn`/`sourceOut`), audio fade ramps & drag handles, caption block trimming, split at playhead (`S`), accessible Radix context menu, clip drag-and-drop, magnet snapping, zoom slider, and bounded undo/redo (50 states). |
+| **Clip Speed & Freeze Frame** | ✅ Implemented | Variable playback rates [0.25x to 4.0x] with pitch preservation and ripple/non-ripple edit modes. Playhead-accurate freeze frame generation splitting clips and shifting downstream media. |
+| **Direct Canvas Manipulation** | ✅ Implemented | Interactive overlay on Program Monitor with selection bounding boxes, 4 corner scale handles, top rotation stem handle, magnetic center snap guide lines (50%), 9:16 safe area margin guides, and double-click inline text editing. |
 | **Keyframes & Motion Presets** | ✅ Implemented | Parameterized keyframe engine (`src/lib/animation/animationPresets.ts`) supporting position, scale, rotation, opacity, and volume across linear, ease-in, ease-out, ease-in-out, and hold curves. Pre-built motion presets (zoom, pan, shake, Ken Burns, typewriter reveal). |
 | **Video Transitions** | ✅ Implemented | Built-in transitions catalog and canvas renderers (`src/lib/transitions/`) for cross dissolves, fade to/from black, fade to/from white, dip to black/white, directional wipes (left/right/up/down), and slides with duration and easing controls. |
-| **Multi-Sequence Management** | ✅ Implemented | Manage multiple sequences per project (`SequenceSelector.tsx`, `sequenceManager.ts`), each with independent resolutions, aspect ratios, and frame rates. |
-| **Composition Evaluator** | ✅ Implemented | Unified deterministic composition evaluator (`src/lib/composition/evaluator.ts`) reconciling tracks, keyframes, transitions, overlays, audio levels, and karaoke captions with identical preview and export results. |
-| **Text & Caption Overlays** | ✅ Implemented | Positionable, styled text overlays and timed short-form captions with line-wrapping, bounding background pills, stroke outlines, and 1:1 preview/export parity. |
-| **Local Speech-to-Text (ASR)** | ✅ Implemented | Offline client-side transcription via Whisper (`src/lib/transcription/engine.ts`) running on WebGPU / WebAssembly with word-level timestamp support and automatic CPU fallback. |
+| **Multi-Sequence Management** | ✅ Implemented | Manage multiple sequences per project (`SequenceSelector.tsx`, `sequenceManager.ts`), each with independent resolutions, aspect ratios (16:9, 9:16, 1:1, 4:5), and frame rates. |
+| **Composition Evaluator** | ✅ Implemented | Unified deterministic composition evaluator (`src/lib/composition/evaluator.ts`) reconciling tracks, keyframes, transitions, framing (fit, fill, blur-bg), crop, flipH/V, overlays, audio levels, and karaoke captions with identical preview and export results. |
+| **Text & Caption Overlays** | ✅ Implemented | Positionable, styled text overlays and timed short-form captions with line-wrapping, bounding background pills, stroke outlines, karaoke word highlight tracking, and "Apply Style to All Captions" workflow. |
+| **Local Speech-to-Text (ASR)** | ✅ Implemented | Offline client-side transcription via structured 5-tier model catalog (`lite`, `fast-en`, `balanced`, `high`, `pro`) running on WebGPU / WebAssembly with word-level timestamp support, WebGPU hardware gating, and OPFS browser cache manager. |
+| **Color Adjustments & Presets** | ✅ Implemented | 6 color presets (`none`, `vivid`, `warm`, `cool`, `bw`, `cinematic`), parameter sliders (brightness, contrast, saturation, exposure, temperature), fast-path default bypass, and zero-leak canvas 2D filter execution in Program preview and export. |
+| **Deterministic Audio Ducking** | ✅ Implemented | Audio track role assignment (`dialogue`, `music`, `sfx`, `general`), automatic dialogue interval harvesting with pause gap merging, and configurable attack/release ducking ramps (-30 to -3 dB reduction) with 1:1 preview and export parity. |
+| **Resizable NLE Workspace** | ✅ Implemented | Professional resizable editor shell powered by `react-resizable-panels`, tabbed left panel (Media, Captions, Transitions, Presets), dual/program monitors, context-aware Radix inspector, and timeline. |
 | **Content-Aware Repurposing** | ✅ Implemented | Local SRT/VTT parsing, 100% full-duration coverage, content-derived excerpt lengths, multi-moment selection from single sources, 5 context integrity dimensions (speech boundary, thought completeness, context sufficiency, standalone clarity, ending closure), and automated caption generation. |
 | **Local Rendering Pipeline** | ✅ Implemented | Pure integer microsecond render planning, frame-by-frame canvas compositing, 1-second bounded chunk audio mixing, backpressure-controlled WebCodecs encoding, and staged progressive writing. |
 | **Export Formats & Validation** | ✅ Implemented | MP4 (H.264 + AAC) default, WebM (VP9 + Opus) supported fallback. Post-render Mediabunny container and track validation. In-app export preview player for direct playback of completed files. |
@@ -98,7 +103,7 @@ npm run build
 ```
 
 ### Testing Strategy & Node vs. Browser Test Coverage
-- **Unit & Architectural Tests:** The repository includes 42 automated test suites in `test/*.test.ts` running via Node's native test runner (`node --experimental-strip-types --test test/*.test.ts`). These suites rigorously test pure mathematical and architectural invariants: timecode precision, keyframe interpolation, transition curves, candidate discovery, context integrity scoring, composition evaluation, cache management, and format verification.
+- **Unit & Architectural Tests:** The repository includes 45 test files (77 test suites / 356 tests) in `test/*.test.ts` running via Node's native test runner (`node --experimental-strip-types --test test/*.test.ts`). These suites rigorously test pure mathematical and architectural invariants: timecode precision, keyframe interpolation, transition curves, candidate discovery, context integrity scoring, composition evaluation, cache management, and format verification.
 - **Synthetic Fixtures:** File format and container inspection tests utilize synthetic in-memory fixtures (standard RIFF/WAV headers and ISOBMFF MP4 boxes) rather than bundled external video files.
 - **Browser & Hardware E2E:** Browser-specific APIs (`WebCodecs` hardware acceleration, `FileSystemDirectoryHandle`, WebGPU Whisper inference, and IndexedDB handle persistence) are validated through manual end-to-end testing in desktop Chrome and Edge. No Playwright or Cypress browser runners are currently integrated.
 
@@ -174,7 +179,7 @@ When you select a local workspace directory, Content Studio operates strictly wi
 
 Content Studio is licensed as open-source software. All third-party libraries and their licenses are documented in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md):
 - **Mediabunny** (`^1.66.0`) — Mozilla Public License 2.0 (MPL-2.0)
-- **Browser-Whisper** (`^2.0.0`) — MIT License
+- **Browser-Whisper** (`2.0.0`) — MIT License
 - **@huggingface/transformers** (`^4.3.1`) — Apache License 2.0 (Apache-2.0)
 - **Next.js** (`16.4.6`) — MIT License
 - **React & React DOM** (`19.3.0`) — MIT License

@@ -27,7 +27,8 @@ import { createWorkspaceProgressiveWriter } from "./progressiveWriter.ts";
 import { validateExportedMedia } from "./validation.ts";
 import { lockCacheResource, unlockCacheResource } from "../cache/cacheManager.ts";
 import { AudioTrackMixer } from "./audioRenderer.ts";
-import { evaluateCompositionAtTime, renderOverlayOnCanvas } from "../composition/evaluator.ts";
+import { evaluateCompositionAtTime, renderOverlayOnCanvas, renderClipFrameToCanvas } from "../composition/evaluator.ts";
+import { evaluateClipTransform } from "../animation/animationPresets.ts";
 import { renderTransition } from "../transitions/renderers.ts";
 import type { TextOverlay } from "../../types/timeline.ts";
 import type {
@@ -286,6 +287,7 @@ export async function renderAndExport(
   let canvasSource: CanvasSource | null = null;
   let audioSource: AudioSampleSource | null = null;
   let audioMixer: AudioTrackMixer | null = null;
+  const imageBitmaps = new Map<string, ImageBitmap>();
 
   try {
     if (signal?.aborted) {
@@ -299,6 +301,22 @@ export async function renderAndExport(
 
     for (const [assetId, sourceMeta] of plan.sources.entries()) {
       if (!sourceMeta.file) continue;
+
+      const isImage =
+        sourceMeta.file.type.startsWith("image/") ||
+        /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(sourceMeta.file.name);
+
+      if (isImage) {
+        if (typeof createImageBitmap === "function") {
+          try {
+            const bmp = await createImageBitmap(sourceMeta.file);
+            imageBitmaps.set(assetId, bmp);
+          } catch (err) {
+            console.warn(`Failed to decode image asset ${assetId}:`, err);
+          }
+        }
+        continue;
+      }
 
       const input = createMediaInput(sourceMeta.file);
       openedInputs.push(input);
@@ -400,6 +418,30 @@ export async function renderAndExport(
 
     const totalSteps = Math.ceil(totalDurationSeconds / intervalSeconds);
 
+    const getFrameSource = async (
+      assetId: string,
+      sourceTime: number
+    ): Promise<{ source: CanvasImageSource; width: number; height: number } | null> => {
+      const bmp = imageBitmaps.get(assetId);
+      if (bmp) {
+        return { source: bmp, width: bmp.width, height: bmp.height };
+      }
+      const sink = canvasSinks.get(assetId);
+      if (sink) {
+        try {
+          const wrapped = await sink.getCanvas(sourceTime);
+          if (wrapped?.canvas) {
+            return {
+              source: wrapped.canvas,
+              width: wrapped.canvas.width,
+              height: wrapped.canvas.height,
+            };
+          }
+        } catch {}
+      }
+      return null;
+    };
+
     for (let step = 0; step < totalSteps; step++) {
       if (signal?.aborted) {
         throw new DOMException("Export was cancelled.", "AbortError");
@@ -465,42 +507,54 @@ export async function renderAndExport(
           const fromClip = activeTrans.fromClip;
           const toClip = activeTrans.toClip;
 
-          let fromCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
-          let toCanvas: HTMLCanvasElement | OffscreenCanvas | null = null;
+          let fromSource: { source: CanvasImageSource; width: number; height: number } | null = null;
+          let toSource: { source: CanvasImageSource; width: number; height: number } | null = null;
 
           if (fromClip) {
-            const sink = canvasSinks.get(fromClip.assetId);
-            if (sink) {
-              const offset = Math.max(0, frame.presentationTimeSeconds - fromClip.startTime);
-              const srcTime = fromClip.sourceIn + offset;
-              try {
-                const wrapped = await sink.getCanvas(srcTime);
-                if (wrapped?.canvas) fromCanvas = wrapped.canvas;
-              } catch {}
-            }
+            const offset = Math.max(0, frame.presentationTimeSeconds - fromClip.startTime);
+            const srcTime = fromClip.freezeFrameSourceTime !== null
+              ? fromClip.freezeFrameSourceTime
+              : fromClip.sourceIn + offset * (fromClip.playbackRate || 1.0);
+            fromSource = await getFrameSource(fromClip.assetId, srcTime);
           }
 
           if (toClip) {
-            const sink = canvasSinks.get(toClip.assetId);
-            if (sink) {
-              const offset = Math.max(0, frame.presentationTimeSeconds - toClip.startTime);
-              const srcTime = toClip.sourceIn + offset;
-              try {
-                const wrapped = await sink.getCanvas(srcTime);
-                if (wrapped?.canvas) toCanvas = wrapped.canvas;
-              } catch {}
-            }
+            const offset = Math.max(0, frame.presentationTimeSeconds - toClip.startTime);
+            const srcTime = toClip.freezeFrameSourceTime !== null
+              ? toClip.freezeFrameSourceTime
+              : toClip.sourceIn + offset * (toClip.playbackRate || 1.0);
+            toSource = await getFrameSource(toClip.assetId, srcTime);
           }
 
           const drawFrom = (targetCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
-            if (fromCanvas) {
-              targetCtx.drawImage(fromCanvas, 0, 0, canvasWidth, canvasHeight);
+            if (fromSource && fromClip) {
+              const tr = evaluateClipTransform(fromClip, Math.max(0, frame.presentationTimeSeconds - fromClip.startTime));
+              renderClipFrameToCanvas(
+                targetCtx,
+                fromSource.source,
+                fromSource.width,
+                fromSource.height,
+                canvasWidth,
+                canvasHeight,
+                fromClip,
+                tr
+              );
             }
           };
 
           const drawTo = (targetCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
-            if (toCanvas) {
-              targetCtx.drawImage(toCanvas, 0, 0, canvasWidth, canvasHeight);
+            if (toSource && toClip) {
+              const tr = evaluateClipTransform(toClip, Math.max(0, frame.presentationTimeSeconds - toClip.startTime));
+              renderClipFrameToCanvas(
+                targetCtx,
+                toSource.source,
+                toSource.width,
+                toSource.height,
+                canvasWidth,
+                canvasHeight,
+                toClip,
+                tr
+              );
             }
           };
 
@@ -514,58 +568,27 @@ export async function renderAndExport(
             drawTo
           );
         } else if (comp && comp.activeClips.length > 0) {
-          // Render multi-track clips with evaluated transforms
+          // Render multi-track clips with canonical evaluator framing & transforms
           for (const evalClip of comp.activeClips) {
-            const sink = canvasSinks.get(evalClip.clip.assetId);
-            if (sink) {
-              try {
-                const wrapped = await sink.getCanvas(evalClip.sourceTime);
-                if (wrapped?.canvas) {
-                  ctx.save();
-                  const tr = evalClip.transform;
-                  ctx.globalAlpha = tr.opacity;
-                  if (
-                    tr.positionX !== 0 ||
-                    tr.positionY !== 0 ||
-                    tr.scaleX !== 1 ||
-                    tr.scaleY !== 1 ||
-                    tr.rotation !== 0
-                  ) {
-                    ctx.translate(
-                      canvasWidth / 2 + (tr.positionX * canvasWidth) / 100,
-                      canvasHeight / 2 + (tr.positionY * canvasHeight) / 100
-                    );
-                    ctx.rotate((tr.rotation * Math.PI) / 180);
-                    ctx.scale(tr.scaleX, tr.scaleY);
-                    ctx.drawImage(
-                      wrapped.canvas,
-                      -canvasWidth / 2,
-                      -canvasHeight / 2,
-                      canvasWidth,
-                      canvasHeight
-                    );
-                  } else {
-                    ctx.drawImage(wrapped.canvas, 0, 0, canvasWidth, canvasHeight);
-                  }
-                  ctx.restore();
-                }
-              } catch (err) {
-                console.warn(`Frame ${f}: failed to decode source canvas`, err);
-              }
+            const frameSrc = await getFrameSource(evalClip.clip.assetId, evalClip.sourceTime);
+            if (frameSrc) {
+              renderClipFrameToCanvas(
+                ctx,
+                frameSrc.source,
+                frameSrc.width,
+                frameSrc.height,
+                canvasWidth,
+                canvasHeight,
+                evalClip.clip,
+                evalClip.transform
+              );
             }
           }
         } else if (frame.activeClip) {
           // Fallback legacy render path
-          const sink = canvasSinks.get(frame.activeClip.assetId);
-          if (sink) {
-            try {
-              const wrapped = await sink.getCanvas(frame.activeClip.sourceTimeSeconds);
-              if (wrapped?.canvas) {
-                ctx.drawImage(wrapped.canvas, 0, 0, canvasWidth, canvasHeight);
-              }
-            } catch (err) {
-              console.warn(`Frame ${f}: failed to decode source canvas`, err);
-            }
+          const frameSrc = await getFrameSource(frame.activeClip.assetId, frame.activeClip.sourceTimeSeconds);
+          if (frameSrc) {
+            ctx.drawImage(frameSrc.source, 0, 0, canvasWidth, canvasHeight);
           }
         }
 
@@ -704,6 +727,13 @@ export async function renderAndExport(
     if (audioMixer) {
       audioMixer.dispose();
     }
+    // Clean up all cached image bitmaps
+    for (const bmp of imageBitmaps.values()) {
+      try {
+        bmp.close();
+      } catch {}
+    }
+    imageBitmaps.clear();
     unlockCacheResource(writer.relativePath);
     // Clean up all opened media inputs
     for (const input of openedInputs) {

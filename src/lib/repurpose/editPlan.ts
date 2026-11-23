@@ -15,7 +15,8 @@ import type { RepurposeCandidate, EditPlan, EditPlanSegment, RepurposeObjective,
 import type { ExportAspectRatio } from "../../types/export.ts";
 import type { SourceTranscript } from "../../types/transcription.ts";
 import { isValidUuid } from "../projectValidation.ts";
-import { createTimeline, validateTimeline, resolveTextOverlayCollisions } from "../timeline/model.ts";
+import { createTimeline, createTrack, validateTimeline, resolveTextOverlayCollisions } from "../timeline/model.ts";
+import { DEFAULT_COLOR_ADJUSTMENTS } from "../color/colorPresets.ts";
 
 /**
  * Validates an EditPlan for structural and temporal integrity.
@@ -173,34 +174,21 @@ export function applyEditPlanToTimeline(
   const t = baseTimeline ? { ...baseTimeline } : createTimeline();
 
   // Find or create primary video track
-  let videoTrack = t.tracks.find((tr) => tr.type === "video");
+  let videoTrack: TimelineTrack | undefined = t.tracks.find((tr) => tr.type === "video");
   if (!videoTrack) {
-    const vId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "track-video-1";
-    videoTrack = {
-      id: vId,
-      type: "video",
-      name: "Video 1",
-      order: 0,
-      muted: false,
-      clips: [],
-    };
+    videoTrack = createTrack("video", "Video 1", 0, "dialogue");
     t.tracks = [videoTrack, ...t.tracks];
   }
 
   // Find or create primary audio track
-  let audioTrack = t.tracks.find((tr) => tr.type === "audio");
+  let audioTrack: TimelineTrack | undefined = t.tracks.find((tr) => tr.type === "audio");
   if (!audioTrack) {
-    const aId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "track-audio-1";
-    audioTrack = {
-      id: aId,
-      type: "audio",
-      name: "Audio 1",
-      order: 1,
-      muted: false,
-      clips: [],
-    };
+    audioTrack = createTrack("audio", "Audio 1", 1, "general");
     t.tracks = [...t.tracks, audioTrack];
   }
+
+  const resolvedVideoTrack = videoTrack!;
+  const resolvedAudioTrack = audioTrack!;
 
   // Create clips sequentially from edit plan segments for both video and audio
   const newVideoClips: TimelineClip[] = [];
@@ -217,37 +205,59 @@ export function applyEditPlanToTimeline(
     newVideoClips.push({
       id: clipId,
       assetId: seg.sourceAssetId,
-      trackId: videoTrack.id,
+      trackId: resolvedVideoTrack.id,
       startTime: seg.timelineStart,
       sourceIn: seg.sourceIn,
       sourceOut: seg.sourceOut,
       volume: 1,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
       linkedClipId: audioClipId,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
     });
 
     newAudioClips.push({
       id: audioClipId,
       assetId: seg.sourceAssetId,
-      trackId: audioTrack.id,
+      trackId: resolvedAudioTrack.id,
       startTime: seg.timelineStart,
       sourceIn: seg.sourceIn,
       sourceOut: seg.sourceOut,
       volume: 1,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
       linkedClipId: clipId,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
     });
   }
 
   // Assign clips to video and audio tracks
   const updatedTracks: TimelineTrack[] = t.tracks.map((tr) => {
-    if (tr.id === videoTrack!.id) {
+    if (tr.id === resolvedVideoTrack.id) {
       return {
         ...tr,
         clips: newVideoClips,
       };
     }
-    if (tr.id === audioTrack!.id) {
+    if (tr.id === resolvedAudioTrack.id) {
       return {
         ...tr,
         clips: newAudioClips,
@@ -261,25 +271,76 @@ export function applyEditPlanToTimeline(
   const newCaptions: TextOverlay[] = [];
 
   if (shouldGenerateCaptions && sourceTranscripts) {
+    let lastCaptionEndUs = 0;
+
     for (const seg of editPlan.segments) {
       const transcript = sourceTranscripts.get(seg.sourceAssetId);
       if (!transcript || transcript.cues.length === 0) continue;
 
+      const segStartUs = Math.round(seg.timelineStart * 1_000_000);
+      const segDurationUs = Math.round(seg.duration * 1_000_000);
+      const segEndUs = segStartUs + segDurationUs;
+      const segSourceInUs = Math.round(seg.sourceIn * 1_000_000);
+      const segSourceOutUs = Math.round(seg.sourceOut * 1_000_000);
+
       // Filter cues overlapping this segment
       for (const cue of transcript.cues) {
-        if (cue.end > seg.sourceIn && cue.start < seg.sourceOut) {
-          // Map cue time to timeline time
-          const relativeStart = Math.max(0, cue.start - seg.sourceIn);
-          const relativeEnd = Math.min(seg.duration, cue.end - seg.sourceIn);
+        const cueStartUs = Math.round(cue.start * 1_000_000);
+        const cueEndUs = Math.round(cue.end * 1_000_000);
 
-          if (relativeEnd <= relativeStart) continue;
+        if (cueEndUs > segSourceInUs && cueStartUs < segSourceOutUs) {
+          // Map cue time relative to exact sourceIn in integer microseconds
+          const clampedCueStartUs = Math.max(segSourceInUs, cueStartUs);
+          const clampedCueEndUs = Math.min(segSourceOutUs, cueEndUs);
+          if (clampedCueEndUs <= clampedCueStartUs) continue;
 
-          const timelineStart = Number((seg.timelineStart + relativeStart).toFixed(2));
-          const timelineEnd = Number((seg.timelineStart + relativeEnd).toFixed(2));
+          const cueOffsetStartUs = clampedCueStartUs - segSourceInUs;
+          const cueOffsetEndUs = clampedCueEndUs - segSourceInUs;
+
+          const rawTimelineStartUs = segStartUs + cueOffsetStartUs;
+          const rawTimelineEndUs = segStartUs + cueOffsetEndUs;
+
+          // Strictly clamp to parent clip window [segStartUs, segEndUs]
+          const clampedStartUs = Math.max(segStartUs, Math.min(segEndUs, rawTimelineStartUs));
+          const clampedEndUs = Math.max(clampedStartUs, Math.min(segEndUs, rawTimelineEndUs));
+          if (clampedEndUs <= clampedStartUs) continue;
+
+          // Enforce monotonic non-overlapping intervals across adjacent cuts
+          const finalStartUs = Math.max(lastCaptionEndUs, clampedStartUs);
+          if (finalStartUs >= segEndUs) continue;
+
+          const finalEndUs = Math.max(finalStartUs, Math.min(segEndUs, clampedEndUs));
+          if (finalEndUs <= finalStartUs) continue;
+
+          lastCaptionEndUs = finalEndUs;
+
+          const timelineStart = Number((finalStartUs / 1_000_000).toFixed(4));
+          const timelineEnd = Number((finalEndUs / 1_000_000).toFixed(4));
 
           const overlayId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : `caption-${cue.id}`;
+
+          // Map word timings if present with exact microsecond mapping
+          const wordTimings = cue.words
+            ?.filter((w) => {
+              const wStartUs = Math.round(w.start * 1_000_000);
+              const wEndUs = Math.round(w.end * 1_000_000);
+              return wEndUs > segSourceInUs && wStartUs < segSourceOutUs;
+            })
+            .map((w) => {
+              const wStartUs = Math.round(w.start * 1_000_000);
+              const wEndUs = Math.round(w.end * 1_000_000);
+              const cWStart = Math.max(segSourceInUs, wStartUs);
+              const cWEnd = Math.min(segSourceOutUs, wEndUs);
+              const tStartUs = segStartUs + (cWStart - segSourceInUs);
+              const tEndUs = segStartUs + (cWEnd - segSourceInUs);
+              return {
+                word: w.word,
+                start: Number((tStartUs / 1_000_000).toFixed(4)),
+                end: Number((tEndUs / 1_000_000).toFixed(4)),
+              };
+            });
 
           newCaptions.push({
             id: overlayId,
@@ -291,6 +352,8 @@ export function applyEditPlanToTimeline(
             fontSize: editPlan.targetAspectRatio === "9:16" ? 28 : 24,
             color: "#ffffff",
             align: "center",
+            presetId: "bold-karaoke",
+            activeWordColor: "#facc15",
             overlayType: "caption",
             preset: "clean",
             backgroundColor: "rgba(0, 0, 0, 0.72)",
@@ -300,6 +363,7 @@ export function applyEditPlanToTimeline(
             boxWidthRatio: 0.85,
             sourceAssetId: seg.sourceAssetId,
             sourceCueId: cue.id,
+            ...(wordTimings && wordTimings.length > 0 ? { wordTimings } : {}),
           });
         }
       }

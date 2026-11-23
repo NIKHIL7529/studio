@@ -52,6 +52,7 @@ test("validateAsset checks asset schema and fields", () => {
   const validAsset = {
     id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     name: "video.mp4",
+    kind: "video" as const,
     mediaType: "video",
     mimeType: "video/mp4",
     size: 10485760,
@@ -63,11 +64,39 @@ test("validateAsset checks asset schema and fields", () => {
   if (res.ok) {
     assert.equal(res.data.name, "video.mp4");
     assert.equal(res.data.size, 10485760);
+    assert.equal(res.data.kind, "video");
+  }
+
+  // Validate image kind asset
+  const imageAsset = validateAsset({
+    ...validAsset,
+    id: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+    name: "logo.png",
+    kind: "image" as const,
+    mediaType: "image",
+    mimeType: "image/png",
+  });
+  assert.equal(imageAsset.ok, true);
+  if (imageAsset.ok) {
+    assert.equal(imageAsset.data.kind, "image");
   }
 
   // Missing UUID
   const invalidId = validateAsset({ ...validAsset, id: "bad-id" });
   assert.equal(invalidId.ok, false);
+
+  // Missing or invalid kind
+  const invalidKind = validateAsset({ ...validAsset, kind: "pdf" });
+  assert.equal(invalidKind.ok, false);
+
+  // Unsupported image extension
+  const invalidImgExt = validateAsset({
+    ...validAsset,
+    id: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+    name: "vector.svg",
+    kind: "image" as const,
+  });
+  assert.equal(invalidImgExt.ok, false);
 
   // Negative size
   const negativeSize = validateAsset({ ...validAsset, size: -1 });
@@ -89,6 +118,7 @@ test("validateProjectDocument accepts valid schema 1 documents and rejects inval
       {
         id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         name: "clip1.mp4",
+        kind: "video" as const,
         mediaType: "video",
         mimeType: "video/mp4",
         size: 5000000,

@@ -16,7 +16,8 @@ export interface ProjectSettings {
   targetAspectRatio?: "16:9" | "9:16" | "1:1" | "4:5";
 }
 
-export type MediaCategory = "video" | "audio" | "unknown";
+export type MediaKind = "video" | "audio" | "image";
+export type MediaCategory = "video" | "audio" | "image" | "unknown";
 
 export interface ProjectAsset {
   /** Stable UUID identifying this asset within the project */
@@ -24,6 +25,9 @@ export interface ProjectAsset {
 
   /** Display filename (e.g. "interview-raw.mp4") */
   name: string;
+
+  /** Canonical asset media kind */
+  kind: MediaKind;
 
   /** Media category inferred from MIME/extension hint */
   mediaType: MediaCategory;
@@ -61,6 +65,9 @@ export interface ProjectAsset {
    */
   fingerprint?: string;
 }
+
+export type MediaAsset = ProjectAsset;
+export type SourceMedia = ProjectAsset;
 
 /**
  * Metadata for a saved project document revision.

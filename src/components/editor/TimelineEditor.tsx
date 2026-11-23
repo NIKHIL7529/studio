@@ -27,15 +27,21 @@ import type {
   TrackType,
 } from "../../types/timeline.ts";
 import type { LiveAssetItem } from "../../types/project.ts";
+import { DEFAULT_COLOR_ADJUSTMENTS } from "../../lib/color/colorPresets.ts";
+import * as Popover from "@radix-ui/react-popover";
 import {
   moveClip,
   duplicateClip,
   splitClip,
   getTimelineDuration,
+  getClipTimelineDuration,
   trimClipStart,
   trimClipEnd,
   addClipToTrack,
   removeTransition,
+  insertFreezeFrameAtPlayhead,
+  setTrackAudioRole,
+  setTrackDucking,
 } from "../../lib/timeline/model.ts";
 import {
   rippleTrimStart,
@@ -75,6 +81,27 @@ import { formatTimecode, stepFrames } from "../../lib/timeline/timecode.ts";
 import { formatDuration } from "../../lib/media/inspector.ts";
 import { IconButton, Button } from "@/components/ui";
 import { KeyboardShortcutsModal } from "./KeyboardShortcutsModal.tsx";
+import * as ContextMenu from "@radix-ui/react-context-menu";
+import * as Slider from "@radix-ui/react-slider";
+import {
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Volume2,
+  VolumeX,
+  Magnet,
+  Scissors,
+  MousePointer,
+  Trash2,
+  Unlink,
+  Flag,
+  ZoomIn,
+  ZoomOut,
+  Copy,
+  Snowflake,
+} from "lucide-react";
+import { useEditorStore } from "../../store/editorStore.ts";
 
 export type EditingTool = "select" | "razor" | "ripple" | "slip" | "slide";
 
@@ -263,6 +290,8 @@ function ClipBlock({
   onDragStart,
   onTrimStart,
   onTrimEnd,
+  onFadeInDrag,
+  onFadeOutDrag,
   onRazorClick,
   onContextAction,
 }: {
@@ -278,13 +307,15 @@ function ClipBlock({
   onDragStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimEnd: (e: React.MouseEvent, clip: TimelineClip) => void;
+  onFadeInDrag?: (e: React.MouseEvent, clip: TimelineClip) => void;
+  onFadeOutDrag?: (e: React.MouseEvent, clip: TimelineClip) => void;
   onRazorClick: (e: React.MouseEvent, clip: TimelineClip) => void;
   onContextAction: (
-    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
+    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio" | "freezeFrame",
     clipId: string
   ) => void;
 }) {
-  const duration = clip.sourceOut - clip.sourceIn;
+  const duration = getClipTimelineDuration(clip);
   const left = clip.startTime * pxPerSec;
   const width = Math.max(3, duration * pxPerSec);
 
@@ -314,204 +345,229 @@ function ClipBlock({
       ? "cursor-ew-resize"
       : "cursor-grab active:cursor-grabbing";
 
-  const [showMenu, setShowMenu] = useState(false);
-  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showMenu) return;
-    const handleOut = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener("mousedown", handleOut);
-    return () => document.removeEventListener("mousedown", handleOut);
-  }, [showMenu]);
-
   return (
-    <div
-      className={`absolute top-1 rounded border text-[10px] font-medium overflow-hidden select-none group
-        ${baseColor} ${mutedOpacity} ${isSelected ? selectedColor : ""} ${cursorStyle}
-      `}
-      style={{ left, width, height: trackHeight - 8 }}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (activeTool === "razor" && !isTrackLocked) {
-          onRazorClick(e, clip);
-        } else {
-          onSelect(e);
-        }
-      }}
-      onMouseDown={(e) => {
-        if (e.button === 0 && !isTrackLocked && (activeTool === "select" || activeTool === "slip")) {
-          onDragStart(e, clip);
-        }
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onSelect(e);
-        setMenuPos({ x: e.clientX, y: e.clientY });
-        setShowMenu(true);
-      }}
-      title={`${assetName} — ${formatDuration(duration)}${clip.linkedClipId ? " (Linked)" : ""}${clip.groupId ? " (Grouped)" : ""}`}
-    >
-      {/* Left Trim Handle */}
-      {!isTrackLocked && (activeTool === "select" || activeTool === "ripple") && (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
         <div
-          className="absolute left-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-cs-accent cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
-          onMouseDown={(e) => {
+          className={`absolute top-1 rounded border text-[10px] font-medium overflow-hidden select-none group
+            ${baseColor} ${mutedOpacity} ${isSelected ? selectedColor : ""} ${cursorStyle}
+          `}
+          style={{ left, width, height: trackHeight - 8 }}
+          onClick={(e) => {
             e.stopPropagation();
-            onTrimStart(e, clip);
+            if (activeTool === "razor" && !isTrackLocked) {
+              onRazorClick(e, clip);
+            } else {
+              onSelect(e);
+            }
           }}
-          title="Drag to trim In-point"
-        >
-          <div className="w-0.5 h-3 bg-white/80 rounded" />
-        </div>
-      )}
-
-      {/* Clip Content Label & Indicators */}
-      <div className="px-2 py-0.5 flex items-center gap-1.5 h-full pointer-events-none">
-        <span className="truncate leading-tight font-medium text-cs-text-primary">
-          {assetName}
-        </span>
-        {clip.linkedClipId && (
-          <span className="shrink-0 text-[9px] text-cs-text-tertiary" title="Linked Media">
-            🔗
-          </span>
-        )}
-        {clip.groupId && (
-          <span className="shrink-0 text-[9px] text-cs-accent" title="Grouped Clip">
-            📁
-          </span>
-        )}
-        {clip.muted && (
-          <span className="shrink-0 text-[9px] text-cs-text-tertiary">🔇</span>
-        )}
-        {clip.speed && clip.speed !== 1 && (
-          <span className="shrink-0 text-[9px] font-mono text-cs-warning">
-            {clip.speed}x
-          </span>
-        )}
-      </div>
-
-      {/* Right Trim Handle */}
-      {!isTrackLocked && (activeTool === "select" || activeTool === "ripple") && (
-        <div
-          className="absolute right-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-cs-accent cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
           onMouseDown={(e) => {
-            e.stopPropagation();
-            onTrimEnd(e, clip);
+            if (e.button === 0 && !isTrackLocked && (activeTool === "select" || activeTool === "slip")) {
+              onDragStart(e, clip);
+            }
           }}
-          title="Drag to trim Out-point"
+          onContextMenu={(e) => {
+            e.stopPropagation();
+            onSelect(e);
+          }}
+          title={`${assetName} — ${formatDuration(duration)}${clip.linkedClipId ? " (Linked)" : ""}${clip.groupId ? " (Grouped)" : ""}`}
         >
-          <div className="w-0.5 h-3 bg-white/80 rounded" />
-        </div>
-      )}
+          {/* Audio Fade In Ramp & Handle */}
+          {clip.fadeIn > 0 && (
+            <div
+              className="absolute top-0 bottom-0 left-0 pointer-events-none bg-gradient-to-r from-white/25 to-transparent"
+              style={{ width: `${Math.min(width, clip.fadeIn * pxPerSec)}px` }}
+            />
+          )}
+          {!isTrackLocked && onFadeInDrag && (
+            <div
+              className="absolute top-0 left-0 w-3 h-3 bg-white/40 hover:bg-white rounded-br cursor-ew-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
+              title={`Fade In: ${clip.fadeIn.toFixed(2)}s`}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onFadeInDrag(e, clip);
+              }}
+            />
+          )}
 
-      {/* Context Menu */}
-      {showMenu && (
-        <div
-          ref={menuRef}
-          className="fixed z-50 min-w-36 rounded border border-cs-border-default bg-cs-bg-overlay shadow-xl py-1 text-xs"
-          style={{ left: menuPos.x, top: menuPos.y }}
+          {/* Audio Fade Out Ramp & Handle */}
+          {clip.fadeOut > 0 && (
+            <div
+              className="absolute top-0 bottom-0 right-0 pointer-events-none bg-gradient-to-l from-white/25 to-transparent"
+              style={{ width: `${Math.min(width, clip.fadeOut * pxPerSec)}px` }}
+            />
+          )}
+          {!isTrackLocked && onFadeOutDrag && (
+            <div
+              className="absolute top-0 right-0 w-3 h-3 bg-white/40 hover:bg-white rounded-bl cursor-ew-resize opacity-0 group-hover:opacity-100 transition-opacity z-10"
+              title={`Fade Out: ${clip.fadeOut.toFixed(2)}s`}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onFadeOutDrag(e, clip);
+              }}
+            />
+          )}
+
+          {/* Left Trim Handle */}
+          {!isTrackLocked && (activeTool === "select" || activeTool === "ripple") && (
+            <div
+              className="absolute left-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-cs-accent cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onTrimStart(e, clip);
+              }}
+              title="Drag to trim In-point"
+            >
+              <div className="w-0.5 h-3 bg-white/80 rounded" />
+            </div>
+          )}
+
+          {/* Clip Content Label & Indicators */}
+          <div className="px-2 py-0.5 flex items-center gap-1.5 h-full pointer-events-none">
+            <span className="truncate leading-tight font-medium text-cs-text-primary">
+              {assetName}
+            </span>
+            {clip.linkedClipId && (
+              <span className="shrink-0 text-[9px] text-cs-text-tertiary" title="Linked Media">
+                🔗
+              </span>
+            )}
+            {clip.groupId && (
+              <span className="shrink-0 text-[9px] text-cs-accent" title="Grouped Clip">
+                📁
+              </span>
+            )}
+            {clip.muted && (
+              <span className="shrink-0 text-[9px] text-cs-text-tertiary">🔇</span>
+            )}
+            {clip.freezeFrameSourceTime !== null ? (
+              <span className="shrink-0 flex items-center gap-0.5 text-[9px] font-mono text-cyan-300 bg-cyan-950/80 px-1 py-0.5 rounded border border-cyan-700/60" title={`Freeze Frame at ${clip.freezeFrameSourceTime.toFixed(2)}s`}>
+                <Snowflake className="w-2.5 h-2.5 text-cyan-400" />
+                <span>Freeze</span>
+              </span>
+            ) : clip.playbackRate !== 1 ? (
+              <span className="shrink-0 text-[9px] font-mono text-cs-warning bg-amber-950/80 px-1 py-0.5 rounded border border-amber-700/60">
+                {clip.playbackRate}x
+              </span>
+            ) : null}
+          </div>
+
+          {/* Right Trim Handle */}
+          {!isTrackLocked && (activeTool === "select" || activeTool === "ripple") && (
+            <div
+              className="absolute right-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-cs-accent cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                onTrimEnd(e, clip);
+              }}
+              title="Drag to trim Out-point"
+            >
+              <div className="w-0.5 h-3 bg-white/80 rounded" />
+            </div>
+          )}
+        </div>
+      </ContextMenu.Trigger>
+
+      {/* Accessible Radix Context Menu */}
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          className="z-50 min-w-44 rounded-md border border-cs-border-default bg-[#18181b]/95 backdrop-blur-md p-1 shadow-2xl text-xs text-cs-text-primary"
           onClick={(e) => e.stopPropagation()}
         >
-          <button
-            className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-            onClick={() => {
-              setShowMenu(false);
-              onContextAction("split", clip.id);
-            }}
+          <ContextMenu.Item
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+            onSelect={() => onContextAction("split", clip.id)}
           >
-            Split at Playhead (S)
-          </button>
-          <button
-            className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-            onClick={() => {
-              setShowMenu(false);
-              onContextAction("duplicate", clip.id);
-            }}
+            <Scissors className="w-3.5 h-3.5 text-cs-text-secondary" />
+            <span>Split at Playhead</span>
+            <span className="ml-auto font-mono text-[10px] text-cs-text-tertiary">S</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+            onSelect={() => onContextAction("duplicate", clip.id)}
           >
-            Duplicate (Ctrl+D)
-          </button>
-          <div className="h-px bg-cs-border-subtle my-1" />
-          {clip.linkedClipId ? (
-            <button
-              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-              onClick={() => {
-                setShowMenu(false);
-                onContextAction("unlink", clip.id);
-              }}
-            >
-              Unlink Audio/Video
-            </button>
-          ) : (
-            <button
-              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-              onClick={() => {
-                setShowMenu(false);
-                onContextAction("link", clip.id);
-              }}
-            >
-              Link Selection
-            </button>
-          )}
-          {clip.groupId ? (
-            <button
-              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-              onClick={() => {
-                setShowMenu(false);
-                onContextAction("ungroup", clip.id);
-              }}
-            >
-              Ungroup Clips
-            </button>
-          ) : (
-            <button
-              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-              onClick={() => {
-                setShowMenu(false);
-                onContextAction("group", clip.id);
-              }}
-            >
-              Group Clips (Ctrl+G)
-            </button>
-          )}
+            <Copy className="w-3.5 h-3.5 text-cs-text-secondary" />
+            <span>Duplicate</span>
+            <span className="ml-auto font-mono text-[10px] text-cs-text-tertiary">Ctrl+D</span>
+          </ContextMenu.Item>
+
+          <ContextMenu.Separator className="h-px bg-white/10 my-1" />
+
           {trackType === "video" && (
-            <button
-              className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-text-primary"
-              onClick={() => {
-                setShowMenu(false);
-                onContextAction("detachAudio", clip.id);
-              }}
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("freezeFrame", clip.id)}
             >
-              Detach Audio (Alt+A)
-            </button>
+              <Snowflake className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Freeze Frame at Playhead</span>
+            </ContextMenu.Item>
           )}
-          <div className="h-px bg-cs-border-subtle my-1" />
-          <button
-            className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-error"
-            onClick={() => {
-              setShowMenu(false);
-              onContextAction("lift", clip.id);
-            }}
+
+          {trackType === "video" && (
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("detachAudio", clip.id)}
+            >
+              <Unlink className="w-3.5 h-3.5 text-cs-text-secondary" />
+              <span>Detach Audio</span>
+              <span className="ml-auto font-mono text-[10px] text-cs-text-tertiary">Alt+A</span>
+            </ContextMenu.Item>
+          )}
+
+          {clip.linkedClipId ? (
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("unlink", clip.id)}
+            >
+              <span>Unlink Audio/Video</span>
+            </ContextMenu.Item>
+          ) : (
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("link", clip.id)}
+            >
+              <span>Link Selection</span>
+            </ContextMenu.Item>
+          )}
+
+          {clip.groupId ? (
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("ungroup", clip.id)}
+            >
+              <span>Ungroup Clips</span>
+            </ContextMenu.Item>
+          ) : (
+            <ContextMenu.Item
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded hover:bg-cs-accent hover:text-white cursor-pointer outline-none"
+              onSelect={() => onContextAction("group", clip.id)}
+            >
+              <span>Group Clips</span>
+              <span className="ml-auto font-mono text-[10px] text-cs-text-tertiary">Ctrl+G</span>
+            </ContextMenu.Item>
+          )}
+
+          <ContextMenu.Separator className="h-px bg-white/10 my-1" />
+
+          <ContextMenu.Item
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded text-red-400 hover:bg-red-500 hover:text-white cursor-pointer outline-none"
+            onSelect={() => onContextAction("lift", clip.id)}
           >
-            Lift / Delete (Del)
-          </button>
-          <button
-            className="w-full px-3 py-1.5 text-left hover:bg-cs-bg-hover text-cs-error"
-            onClick={() => {
-              setShowMenu(false);
-              onContextAction("rippleDelete", clip.id);
-            }}
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete (Lift)</span>
+            <span className="ml-auto font-mono text-[10px] opacity-70">Del</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded text-red-400 hover:bg-red-500 hover:text-white cursor-pointer outline-none"
+            onSelect={() => onContextAction("rippleDelete", clip.id)}
           >
-            Ripple Delete (Shift+Del)
-          </button>
-        </div>
-      )}
-    </div>
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Ripple Delete</span>
+            <span className="ml-auto font-mono text-[10px] opacity-70">Shift+Del</span>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 
@@ -604,6 +660,8 @@ function OverlayBlock({
   laneIndex = 0,
   totalLanes = 1,
   onSelect,
+  onTrimStart,
+  onTrimEnd,
 }: {
   overlay: TextOverlay;
   pxPerSec: number;
@@ -611,6 +669,8 @@ function OverlayBlock({
   laneIndex?: number;
   totalLanes?: number;
   onSelect: () => void;
+  onTrimStart?: (e: React.MouseEvent, overlay: TextOverlay) => void;
+  onTrimEnd?: (e: React.MouseEvent, overlay: TextOverlay) => void;
 }) {
   const left = overlay.startTime * pxPerSec;
   const width = Math.max(4, (overlay.endTime - overlay.startTime) * pxPerSec);
@@ -625,7 +685,7 @@ function OverlayBlock({
 
   return (
     <div
-      className={`absolute rounded border text-[10px] font-medium overflow-hidden cursor-pointer select-none box-border transition-shadow ${
+      className={`absolute rounded border text-[10px] font-medium overflow-hidden cursor-pointer select-none box-border transition-shadow group ${
         isCaption
           ? "border-amber-500/60 bg-amber-500/20 text-amber-300"
           : "border-sky-500/60 bg-sky-500/20 text-sky-300"
@@ -637,7 +697,21 @@ function OverlayBlock({
       }}
       title={`${overlay.text || "(empty caption)"} [${overlay.startTime.toFixed(2)}s – ${overlay.endTime.toFixed(2)}s]`}
     >
-      <div className="px-1.5 py-0.2 truncate leading-tight flex items-center h-full">
+      {/* Left Trim Handle */}
+      {onTrimStart && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-amber-400 cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onTrimStart(e, overlay);
+          }}
+          title="Drag to trim caption start"
+        >
+          <div className="w-0.5 h-2 bg-white/80 rounded" />
+        </div>
+      )}
+
+      <div className="px-1.5 py-0.2 truncate leading-tight flex items-center h-full pointer-events-none">
         {isNarrow ? (
           <span className="font-mono text-[9px] font-bold mx-auto">
             {isCaption ? "CC" : "T"}
@@ -646,6 +720,20 @@ function OverlayBlock({
           <span className="truncate">{overlay.text || "(empty)"}</span>
         )}
       </div>
+
+      {/* Right Trim Handle */}
+      {onTrimEnd && (
+        <div
+          className="absolute right-0 top-0 bottom-0 w-2 hover:w-3 bg-white/20 hover:bg-amber-400 cursor-ew-resize z-10 transition-all opacity-0 group-hover:opacity-100 flex items-center justify-center"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onTrimEnd(e, overlay);
+          }}
+          title="Drag to trim caption end"
+        >
+          <div className="w-0.5 h-2 bg-white/80 rounded" />
+        </div>
+      )}
     </div>
   );
 }
@@ -706,6 +794,87 @@ export function TimelineEditor({
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [clipboardClips, setClipboardClips] = useState<TimelineClip[]>([]);
+  const { snapEnabled, toggleSnap } = useEditorStore();
+
+  const handleFadeInDrag = useCallback((e: React.MouseEvent, clip: TimelineClip) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const origFade = clip.fadeIn || 0;
+    const clipDur = getClipTimelineDuration(clip);
+    const onMove = (ev: MouseEvent) => {
+      const dt = (ev.clientX - startX) / pxPerSec;
+      const newFade = Math.max(0, Math.min(clipDur, origFade + dt));
+      const updated = timeline.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => (c.id === clip.id ? { ...c, fadeIn: Number(newFade.toFixed(2)) } : c)),
+      }));
+      onTimelineChange({ ...timeline, tracks: updated });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [pxPerSec, timeline, onTimelineChange]);
+
+  const handleFadeOutDrag = useCallback((e: React.MouseEvent, clip: TimelineClip) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const origFade = clip.fadeOut || 0;
+    const clipDur = getClipTimelineDuration(clip);
+    const onMove = (ev: MouseEvent) => {
+      const dt = (startX - ev.clientX) / pxPerSec;
+      const newFade = Math.max(0, Math.min(clipDur, origFade + dt));
+      const updated = timeline.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => (c.id === clip.id ? { ...c, fadeOut: Number(newFade.toFixed(2)) } : c)),
+      }));
+      onTimelineChange({ ...timeline, tracks: updated });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [pxPerSec, timeline, onTimelineChange]);
+
+  const handleOverlayTrimStart = useCallback((e: React.MouseEvent, overlay: TextOverlay) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const origStart = overlay.startTime;
+    const onMove = (ev: MouseEvent) => {
+      const dt = (ev.clientX - startX) / pxPerSec;
+      const newStart = Math.max(0, Math.min(overlay.endTime - 0.2, origStart + dt));
+      const updated = timeline.textOverlays.map((o) => (o.id === overlay.id ? { ...o, startTime: Number(newStart.toFixed(2)) } : o));
+      onTimelineChange({ ...timeline, textOverlays: updated });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [pxPerSec, timeline, onTimelineChange]);
+
+  const handleOverlayTrimEnd = useCallback((e: React.MouseEvent, overlay: TextOverlay) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const origEnd = overlay.endTime;
+    const onMove = (ev: MouseEvent) => {
+      const dt = (ev.clientX - startX) / pxPerSec;
+      const newEnd = Math.max(overlay.startTime + 0.2, origEnd + dt);
+      const updated = timeline.textOverlays.map((o) => (o.id === overlay.id ? { ...o, endTime: Number(newEnd.toFixed(2)) } : o));
+      onTimelineChange({ ...timeline, textOverlays: updated });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [pxPerSec, timeline, onTimelineChange]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const rulerAreaRef = useRef<HTMLDivElement>(null);
@@ -803,11 +972,13 @@ export function TimelineEditor({
       const dragStartX = e.clientX;
       const origSourceIn = clip.sourceIn;
       const origStartTime = clip.startTime;
+      const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
 
       const handleMouseMove = (ev: MouseEvent) => {
         const dx = ev.clientX - dragStartX;
         const dt = dx / pxPerSec;
-        const newSourceIn = Math.max(0, origSourceIn + dt);
+        const dtSource = dt * rate;
+        const newSourceIn = Math.max(0, origSourceIn + dtSource);
         if (newSourceIn >= clip.sourceOut - 0.1) return;
 
         if (activeTool === "ripple") {
@@ -833,11 +1004,13 @@ export function TimelineEditor({
       e.preventDefault();
       const dragStartX = e.clientX;
       const origSourceOut = clip.sourceOut;
+      const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
 
       const handleMouseMove = (ev: MouseEvent) => {
         const dx = ev.clientX - dragStartX;
         const dt = dx / pxPerSec;
-        const newSourceOut = origSourceOut + dt;
+        const dtSource = dt * rate;
+        const newSourceOut = origSourceOut + dtSource;
         if (newSourceOut <= clip.sourceIn + 0.1) return;
 
         if (activeTool === "ripple") {
@@ -863,7 +1036,8 @@ export function TimelineEditor({
       const rect = e.currentTarget.getBoundingClientRect();
       const clickX = e.clientX - rect.left;
       const clickSeconds = clip.startTime + clickX / pxPerSec;
-      const offset = clickSeconds - clip.startTime;
+      const rate = clip.playbackRate > 0 ? clip.playbackRate : 1.0;
+      const offset = (clickSeconds - clip.startTime) * rate;
       const splitSourceTime = clip.sourceIn + offset;
 
       const result = splitClip(timeline, clip.id, splitSourceTime);
@@ -1033,7 +1207,7 @@ export function TimelineEditor({
         e.preventDefault();
         const clip = timeline.tracks.flatMap((t) => t.clips).find((c) => c.id === selectedClipId);
         if (clip) {
-          const dur = clip.sourceOut - clip.sourceIn;
+          const dur = getClipTimelineDuration(clip);
           onTimelineChange(duplicateClip(timeline, selectedClipId, clip.startTime + dur));
         }
         return;
@@ -1055,6 +1229,8 @@ export function TimelineEditor({
     onSeek,
     onTimelineChange,
     onSelectClip,
+    selectedTransitionId,
+    onSelectTransition,
     onUndo,
     onRedo,
   ]);
@@ -1062,12 +1238,17 @@ export function TimelineEditor({
   // Context Actions Handler
   const handleContextAction = useCallback(
     (
-      action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
+      action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio" | "freezeFrame",
       clipId: string
     ) => {
       if (action === "detachAudio") {
         const res = detachAudio(timeline, clipId);
         if (res) onTimelineChange(res.timeline);
+        return;
+      }
+
+      if (action === "freezeFrame") {
+        onTimelineChange(insertFreezeFrameAtPlayhead(timeline, clipId, currentTime));
         return;
       }
 
@@ -1084,12 +1265,18 @@ export function TimelineEditor({
       } else if (action === "duplicate") {
         const clip = timeline.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
         if (clip) {
-          const dur = clip.sourceOut - clip.sourceIn;
+          const dur = getClipTimelineDuration(clip);
           onTimelineChange(duplicateClip(timeline, clipId, clip.startTime + dur));
         }
       } else if (action === "split") {
-        const result = splitClip(timeline, clipId, currentTime);
-        if (result) onTimelineChange(result);
+        const found = timeline.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
+        if (found) {
+          const rate = found.playbackRate > 0 ? found.playbackRate : 1.0;
+          const offset = (currentTime - found.startTime) * rate;
+          const splitSourceTime = found.sourceIn + offset;
+          const result = splitClip(timeline, clipId, splitSourceTime);
+          if (result) onTimelineChange(result);
+        }
       } else if (action === "group") {
         onTimelineChange(groupClips(timeline, targetIds));
       } else if (action === "ungroup") {
@@ -1137,7 +1324,7 @@ export function TimelineEditor({
     <div className="flex flex-col h-full bg-cs-bg-base border-t border-cs-border-subtle overflow-hidden select-none">
       {/* ─── NLE Toolbar & Transport Bar ────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-cs-bg-surface border-b border-cs-border-subtle shrink-0 flex-wrap">
-        {/* Left: Tool Selection + Undo / Redo */}
+        {/* Left: Tool Selection + Snapping + Undo / Redo */}
         <div className="flex items-center gap-1.5">
           {/* Tool Selector */}
           <div className="flex items-center bg-cs-bg-elevated rounded border border-cs-border-subtle p-0.5">
@@ -1148,9 +1335,7 @@ export function TimelineEditor({
               }`}
               title="Selection Tool (V)"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-                <polygon points="3 3 10 21 14 13 21 10 3 3" />
-              </svg>
+              <MousePointer className="w-3 h-3" />
               <span className="hidden sm:inline">Select</span>
             </button>
             <button
@@ -1160,13 +1345,7 @@ export function TimelineEditor({
               }`}
               title="Razor / Blade Tool (C)"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <circle cx="6" cy="6" r="3" />
-                <circle cx="6" cy="18" r="3" />
-                <line x1="20" y1="4" x2="8.12" y2="15.88" />
-                <line x1="14.47" y1="14.48" x2="20" y2="20" />
-                <line x1="8.12" y1="8.12" x2="12" y2="12" />
-              </svg>
+              <Scissors className="w-3 h-3" />
               <span className="hidden sm:inline">Razor</span>
             </button>
             <button
@@ -1176,12 +1355,7 @@ export function TimelineEditor({
               }`}
               title="Ripple Edit Tool (B)"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="8" y1="4" x2="8" y2="20" />
-                <line x1="16" y1="4" x2="16" y2="20" />
-                <polyline points="4 12 1 12 1 16" />
-                <polyline points="20 12 23 12 23 8" />
-              </svg>
+              <span className="font-mono text-[10px] font-bold">»</span>
               <span className="hidden sm:inline">Ripple</span>
             </button>
             <button
@@ -1191,13 +1365,24 @@ export function TimelineEditor({
               }`}
               title="Slip Tool (Y)"
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="15 18 9 12 15 6" />
-                <polyline points="9 18 3 12 9 6" />
-              </svg>
+              <span className="font-mono text-[10px] font-bold">⇄</span>
               <span className="hidden sm:inline">Slip</span>
             </button>
           </div>
+
+          <div className="w-px h-5 bg-cs-border-subtle mx-0.5 shrink-0" />
+
+          {/* Magnetic Snap Toggle */}
+          <button
+            onClick={toggleSnap}
+            className={`h-6 px-2 rounded text-xs font-medium flex items-center gap-1 transition-colors ${
+              snapEnabled ? "bg-cs-accent/20 text-cs-accent border border-cs-accent/40" : "text-cs-text-tertiary hover:text-cs-text-primary"
+            }`}
+            title={snapEnabled ? "Snapping ON (N)" : "Snapping OFF (N)"}
+          >
+            <Magnet className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Snap</span>
+          </button>
 
           <div className="w-px h-5 bg-cs-border-subtle mx-0.5 shrink-0" />
 
@@ -1216,7 +1401,7 @@ export function TimelineEditor({
           </IconButton>
         </div>
 
-        {/* Center: Transport + Timecode Readout */}
+        {/* Center: Transport + Timecode Readout + Clip Quick Actions */}
         <div className="flex items-center gap-2">
           {/* Step Back Frame */}
           <IconButton label="Step 1 Frame Back (Left)" size="sm" onClick={() => onSeek(Math.max(0, stepFrames(currentTime, -1, fps)))}>
@@ -1277,10 +1462,7 @@ export function TimelineEditor({
             size="sm"
             onClick={() => onTimelineChange(razorSplitAtPlayhead(timeline, currentTime, undefined, selectedClipId || undefined))}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-              <line x1="12" y1="2" x2="12" y2="22" strokeDasharray="3 3" />
-              <path d="M19 12H5" />
-            </svg>
+            <Scissors className="w-3.5 h-3.5 text-cs-text-secondary" />
           </IconButton>
 
           {/* Add Marker */}
@@ -1289,37 +1471,67 @@ export function TimelineEditor({
             size="sm"
             onClick={() => onTimelineChange(addMarker(timeline, { time: currentTime, label: "Marker", color: "#3b82f6" }))}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
-              <line x1="4" y1="22" x2="4" y2="15" />
-            </svg>
+            <Flag className="w-3.5 h-3.5 text-cs-text-secondary" />
           </IconButton>
+
+          {/* Contextual Ripple Delete CTA */}
+          {selectedClipId && (
+            <IconButton
+              label="Ripple Delete Selected Clip (Shift+Del)"
+              size="sm"
+              onClick={() => onTimelineChange(rippleDeleteClips(timeline, [selectedClipId]))}
+              className="text-red-400 hover:text-red-300"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </IconButton>
+          )}
+
+          {/* Contextual Detach Audio CTA */}
+          {selectedClipId && (
+            <IconButton
+              label="Detach Audio (Alt+A)"
+              size="sm"
+              onClick={() => {
+                const res = detachAudio(timeline, selectedClipId);
+                if (res) onTimelineChange(res);
+              }}
+            >
+              <Unlink className="w-3.5 h-3.5 text-cs-text-secondary" />
+            </IconButton>
+          )}
         </div>
 
         {/* Right: Zoom & Shortcuts */}
         <div className="flex items-center gap-2">
-          {/* Zoom controls */}
-          <IconButton label="Zoom out (-)" size="sm" onClick={zoomOut} disabled={pxPerSec <= ZOOM_MIN}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              <line x1="8" y1="11" x2="14" y2="11" />
-            </svg>
-          </IconButton>
+          {/* Radix Slider Zoom controls */}
+          <div className="flex items-center gap-1.5 bg-cs-bg-elevated px-2 py-0.5 rounded border border-cs-border-subtle">
+            <IconButton label="Zoom out (-)" size="sm" onClick={zoomOut} disabled={pxPerSec <= ZOOM_MIN}>
+              <ZoomOut className="w-3 h-3 text-cs-text-secondary" />
+            </IconButton>
+            <Slider.Root
+              value={[pxPerSec]}
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={5}
+              onValueChange={([val]) => setPxPerSec(val)}
+              className="relative flex items-center select-none touch-none w-16 sm:w-20 h-4 cursor-pointer"
+            >
+              <Slider.Track className="bg-cs-border-default relative grow rounded-full h-1">
+                <Slider.Range className="absolute bg-cs-accent rounded-full h-full" />
+              </Slider.Track>
+              <Slider.Thumb className="block w-2.5 h-2.5 bg-white rounded-full shadow hover:scale-110 focus:outline-none" />
+            </Slider.Root>
+            <IconButton label="Zoom in (+)" size="sm" onClick={zoomIn} disabled={pxPerSec >= ZOOM_MAX}>
+              <ZoomIn className="w-3 h-3 text-cs-text-secondary" />
+            </IconButton>
+          </div>
+
           <IconButton label="Zoom to Fit (Shift+Z)" size="sm" onClick={zoomToFit}>
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
               <polyline points="15 3 21 3 21 9" />
               <polyline points="9 21 3 21 3 15" />
               <line x1="21" y1="3" x2="14" y2="10" />
               <line x1="3" y1="21" x2="10" y2="14" />
-            </svg>
-          </IconButton>
-          <IconButton label="Zoom in (+)" size="sm" onClick={zoomIn} disabled={pxPerSec >= ZOOM_MAX}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" strokeWidth="2" stroke="currentColor">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              <line x1="11" y1="8" x2="11" y2="14" />
-              <line x1="8" y1="11" x2="14" y2="11" />
             </svg>
           </IconButton>
 
@@ -1461,6 +1673,8 @@ export function TimelineEditor({
                   onClipDragStart={handleClipDragStart}
                   onTrimStart={handleTrimStart}
                   onTrimEnd={handleTrimEnd}
+                  onFadeInDrag={handleFadeInDrag}
+                  onFadeOutDrag={handleFadeOutDrag}
                   onRazorClick={handleRazorClick}
                   onContextAction={handleContextAction}
                   onCloseGap={(gapStart) => onTimelineChange(closeGap(timeline, track.id, gapStart, true))}
@@ -1487,6 +1701,8 @@ export function TimelineEditor({
                     isSelected={selectedOverlayId === overlay.id}
                     laneIndex={overlayLanes.get(overlay.id) ?? 0}
                     totalLanes={overlayTotalLanes}
+                    onTrimStart={handleOverlayTrimStart}
+                    onTrimEnd={handleOverlayTrimEnd}
                     onSelect={() => {
                       onSelectClip(null);
                       onSelectOverlay(overlay.id);
@@ -1576,65 +1792,196 @@ function TrackHeader({
             {track.name}
           </span>
         )}
+
+        {/* Audio Track Role Badge & Ducking Popover */}
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <button
+              onClick={(e) => e.stopPropagation()}
+              className={`px-1 py-0.2 rounded text-[9px] font-semibold uppercase tracking-wider border transition-colors shrink-0 ${
+                track.ducking?.enabled
+                  ? "bg-amber-500/20 text-amber-300 border-amber-500/40"
+                  : track.audioRole === "dialogue"
+                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                  : track.audioRole === "music"
+                  ? "bg-purple-500/20 text-purple-300 border-purple-500/40"
+                  : "bg-white/10 text-cs-text-secondary border-white/10"
+              }`}
+              title={`Role: ${track.audioRole}${track.ducking?.enabled ? " (Ducking ON)" : ""}`}
+            >
+              {track.audioRole.slice(0, 3)}
+              {track.ducking?.enabled && " 🦆"}
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              className="z-50 w-56 p-3 rounded-lg bg-cs-bg-elevated border border-cs-border-default shadow-xl text-xs flex flex-col gap-2.5 select-none text-cs-text-primary"
+              sideOffset={5}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="font-semibold text-cs-text-primary text-[11px] uppercase tracking-wider">
+                Track Audio & Ducking
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] text-cs-text-tertiary">Role</label>
+                <div className="grid grid-cols-2 gap-1">
+                  {(["dialogue", "music", "sfx", "general"] as const).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => onTimelineChange(setTrackAudioRole(timeline, track.id, r))}
+                      className={`h-6 rounded text-[10px] font-medium border capitalize ${
+                        track.audioRole === r
+                          ? "bg-cs-accent text-white border-cs-accent"
+                          : "bg-cs-bg-base border-cs-border-subtle text-cs-text-secondary hover:text-white"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="pt-2 border-t border-cs-border-subtle flex flex-col gap-1.5">
+                <label className="flex items-center justify-between text-[11px] text-cs-text-secondary cursor-pointer">
+                  <span>Auto-Ducking</span>
+                  <input
+                    type="checkbox"
+                    checked={!!track.ducking?.enabled}
+                    onChange={(e) =>
+                      onTimelineChange(setTrackDucking(timeline, track.id, { enabled: e.target.checked }))
+                    }
+                    className="rounded border-cs-border-default accent-cs-accent"
+                  />
+                </label>
+                {track.ducking?.enabled && (
+                  <div className="flex flex-col gap-1.5 pt-1 text-[10px] text-cs-text-tertiary">
+                    <div className="flex justify-between items-center">
+                      <span>Reduction: {track.ducking.reductionDb} dB</span>
+                      <input
+                        type="range"
+                        min={-30}
+                        max={-3}
+                        step={1}
+                        value={track.ducking.reductionDb}
+                        onChange={(e) =>
+                          onTimelineChange(
+                            setTrackDucking(timeline, track.id, { reductionDb: Number(e.target.value) })
+                          )
+                        }
+                        className="w-24 accent-cs-accent"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span>Attack: {track.ducking.attackMs} ms</span>
+                      <input
+                        type="range"
+                        min={20}
+                        max={1000}
+                        step={10}
+                        value={track.ducking.attackMs}
+                        onChange={(e) =>
+                          onTimelineChange(
+                            setTrackDucking(timeline, track.id, { attackMs: Number(e.target.value) })
+                          )
+                        }
+                        className="w-24 accent-cs-accent"
+                      />
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span>Release: {track.ducking.releaseMs} ms</span>
+                      <input
+                        type="range"
+                        min={50}
+                        max={2000}
+                        step={25}
+                        value={track.ducking.releaseMs}
+                        onChange={(e) =>
+                          onTimelineChange(
+                            setTrackDucking(timeline, track.id, { releaseMs: Number(e.target.value) })
+                          )
+                        }
+                        className="w-24 accent-cs-accent"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       </div>
 
       {/* Track Control Buttons (Lock, Video Hide, Mute, Solo, SyncLock) */}
-      <div className="flex items-center gap-0.5 shrink-0">
+      <div className="flex items-center gap-1 shrink-0">
         {/* Lock Track */}
         <button
-          onClick={() => onTimelineChange(toggleTrackLock(timeline, track.id))}
-          className={`w-4 h-4 rounded text-[9px] flex items-center justify-center transition-colors ${
-            track.locked ? "text-cs-error font-bold" : "text-cs-text-tertiary hover:text-cs-text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTimelineChange(toggleTrackLock(timeline, track.id));
+          }}
+          className={`p-1 rounded transition-colors ${
+            track.locked ? "text-red-400 bg-red-500/10" : "text-cs-text-tertiary hover:text-cs-text-primary"
           }`}
-          title={track.locked ? "Unlock track" : "Lock track against edits"}
+          title={track.locked ? "Unlock track" : "Lock track"}
         >
-          {track.locked ? "🔒" : "🔓"}
+          {track.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
         </button>
 
-        {/* Hide Video */}
+        {/* Hide Video Track */}
         {track.type === "video" && (
           <button
-            onClick={() => onTimelineChange(toggleTrackHidden(timeline, track.id))}
-            className={`w-4 h-4 rounded text-[9px] flex items-center justify-center transition-colors ${
-              track.hidden ? "text-cs-warning font-bold" : "text-cs-text-tertiary hover:text-cs-text-primary"
+            onClick={(e) => {
+              e.stopPropagation();
+              onTimelineChange(toggleTrackHidden(timeline, track.id));
+            }}
+            className={`p-1 rounded transition-colors ${
+              track.hidden ? "text-amber-400 bg-amber-500/10" : "text-cs-text-tertiary hover:text-cs-text-primary"
             }`}
             title={track.hidden ? "Show video track" : "Hide video track"}
           >
-            {track.hidden ? "🚫" : "👁️"}
+            {track.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
           </button>
         )}
 
-        {/* Mute */}
+        {/* Mute Track */}
         <button
-          onClick={() => onTimelineChange(toggleTrackMute(timeline, track.id))}
-          className={`w-4 h-4 rounded text-[9px] flex items-center justify-center transition-colors ${
-            track.muted ? "text-cs-warning font-bold" : "text-cs-text-tertiary hover:text-cs-text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTimelineChange(toggleTrackMute(timeline, track.id));
+          }}
+          className={`p-1 rounded transition-colors ${
+            track.muted ? "text-amber-400 bg-amber-500/10" : "text-cs-text-tertiary hover:text-cs-text-primary"
           }`}
           title={track.muted ? "Unmute track" : "Mute track"}
         >
-          M
+          {track.muted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
         </button>
 
-        {/* Solo */}
+        {/* Solo Track */}
         <button
-          onClick={() => onTimelineChange(toggleTrackSolo(timeline, track.id))}
-          className={`w-4 h-4 rounded text-[9px] flex items-center justify-center transition-colors ${
-            track.solo ? "bg-cs-accent text-white font-bold" : "text-cs-text-tertiary hover:text-cs-text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTimelineChange(toggleTrackSolo(timeline, track.id));
+          }}
+          className={`w-4 h-4 rounded text-[9px] font-bold flex items-center justify-center transition-colors ${
+            track.solo ? "bg-cs-accent text-white" : "text-cs-text-tertiary hover:text-cs-text-primary bg-white/5"
           }`}
           title={track.solo ? "Disable solo" : "Solo track"}
         >
           S
         </button>
 
-        {/* Sync Lock */}
+        {/* Sync Lock Track */}
         <button
-          onClick={() => onTimelineChange(toggleTrackSyncLock(timeline, track.id))}
-          className={`w-4 h-4 rounded text-[9px] flex items-center justify-center transition-colors ${
-            track.syncLocked ? "text-cs-info font-bold" : "text-cs-text-tertiary line-through hover:text-cs-text-primary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onTimelineChange(toggleTrackSyncLock(timeline, track.id));
+          }}
+          className={`p-1 rounded transition-colors ${
+            track.syncLocked ? "text-cyan-400" : "text-cs-text-tertiary opacity-40 hover:opacity-100"
           }`}
-          title={track.syncLocked ? "Sync-lock active (Ripples with other tracks)" : "Sync-lock disabled"}
+          title={track.syncLocked ? "Sync-lock enabled" : "Sync-lock disabled"}
         >
-          🔗
+          <span className="font-mono text-[9px] font-bold">🔗</span>
         </button>
       </div>
     </div>
@@ -1659,6 +2006,8 @@ function TrackLane({
   onClipDragStart,
   onTrimStart,
   onTrimEnd,
+  onFadeInDrag,
+  onFadeOutDrag,
   onRazorClick,
   onContextAction,
   onCloseGap,
@@ -1679,9 +2028,11 @@ function TrackLane({
   onClipDragStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimStart: (e: React.MouseEvent, clip: TimelineClip) => void;
   onTrimEnd: (e: React.MouseEvent, clip: TimelineClip) => void;
+  onFadeInDrag?: (e: React.MouseEvent, clip: TimelineClip) => void;
+  onFadeOutDrag?: (e: React.MouseEvent, clip: TimelineClip) => void;
   onRazorClick: (e: React.MouseEvent, clip: TimelineClip) => void;
   onContextAction: (
-    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio",
+    action: "lift" | "rippleDelete" | "duplicate" | "split" | "link" | "unlink" | "group" | "ungroup" | "detachAudio" | "freezeFrame",
     clipId: string
   ) => void;
   onCloseGap: (gapStart: number) => void;
@@ -1728,6 +2079,17 @@ function TrackLane({
       sourceOut: mediaDuration,
       volume: 1,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
     };
 
     onAddClip?.(track.id, newClip);
@@ -1738,7 +2100,11 @@ function TrackLane({
   return (
     <div
       className={`absolute left-0 right-0 border-b border-cs-border-subtle ${
-        track.locked ? "bg-cs-bg-base/60" : track.muted ? "bg-cs-bg-base/40" : ""
+        track.locked
+          ? "bg-[repeating-linear-gradient(45deg,#131316,#131316_10px,#1c1c21_10px,#1c1c21_20px)] opacity-60 pointer-events-none"
+          : track.muted
+          ? "bg-cs-bg-base/40 opacity-70"
+          : ""
       }`}
       style={{ ...style, height: TRACK_HEIGHT }}
       onClick={onLaneClick}
@@ -1775,6 +2141,8 @@ function TrackLane({
             onDragStart={onClipDragStart}
             onTrimStart={onTrimStart}
             onTrimEnd={onTrimEnd}
+            onFadeInDrag={onFadeInDrag}
+            onFadeOutDrag={onFadeOutDrag}
             onRazorClick={onRazorClick}
             onContextAction={onContextAction}
           />

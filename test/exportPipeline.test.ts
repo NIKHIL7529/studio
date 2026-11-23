@@ -116,6 +116,8 @@ describe("Export Pipeline Architecture & Safeguards", () => {
       fontSize: 32,
       color: "#ff0000",
       align: "center",
+      presetId: "classic",
+      activeWordColor: "#facc15",
     };
 
     renderTextOverlayToCanvas(mockCtx, overlay, 1920, 1080);

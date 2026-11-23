@@ -166,6 +166,7 @@ describe("Repurpose Pipeline End-to-End Orchestration", () => {
       {
         id: asset1Id,
         name: file1.name,
+        kind: "audio",
         mediaType: "audio",
         mimeType: "audio/wav",
         size: file1.size,
@@ -182,6 +183,7 @@ describe("Repurpose Pipeline End-to-End Orchestration", () => {
       {
         id: asset2Id,
         name: file2.name,
+        kind: "audio",
         mediaType: "audio",
         mimeType: "audio/wav",
         size: file2.size,

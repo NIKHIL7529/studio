@@ -8,8 +8,23 @@
  * - Never execute or evaluate any content from the document.
  */
 
-import type { ProjectDocument, ProjectAsset, MediaCategory, ProjectExport, ExportOutputSettings } from "../types/project.ts";
-import type { TimelineDocument, TimelineTrack, TimelineClip, TextOverlay, TimelineMarker, TrackType, SequenceDocument } from "../types/timeline.ts";
+import type { ProjectDocument, ProjectAsset, MediaKind, MediaCategory, ProjectExport, ExportOutputSettings } from "../types/project.ts";
+import type {
+  TimelineDocument,
+  TimelineTrack,
+  TimelineClip,
+  ClipFitMode,
+  ClipCrop,
+  CaptionPresetId,
+  TextOverlay,
+  TimelineMarker,
+  TrackType,
+  SequenceDocument,
+  ColorPresetId,
+  ColorAdjustments,
+  TrackAudioRole,
+  TrackDuckingConfig,
+} from "../types/timeline.ts";
 import type { InspectedMediaMetadata, InspectedVideoTrack, InspectedAudioTrack } from "./media/types.ts";
 import { validateTimeline } from "./timeline/model.ts";
 
@@ -82,7 +97,22 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
     return { ok: false, error: "Asset name must be a non-empty string." };
   }
 
-  const validCategories: MediaCategory[] = ["video", "audio", "unknown"];
+  const validKinds: MediaKind[] = ["video", "audio", "image"];
+  if (typeof obj.kind !== "string" || !validKinds.includes(obj.kind as MediaKind)) {
+    return { ok: false, error: `Asset kind must be one of: ${validKinds.join(", ")}. Received: ${String(obj.kind)}` };
+  }
+  const kind = obj.kind as MediaKind;
+
+  if (kind === "image") {
+    const nameLower = (obj.name as string).toLowerCase();
+    const ext = nameLower.slice(nameLower.lastIndexOf("."));
+    const validImageExts = [".png", ".jpg", ".jpeg", ".webp"];
+    if (ext && !validImageExts.includes(ext)) {
+      return { ok: false, error: `Image asset extension "${ext}" is not supported. Supported extensions: .png, .jpg, .jpeg, .webp.` };
+    }
+  }
+
+  const validCategories: MediaCategory[] = ["video", "audio", "image", "unknown"];
   const mediaType: MediaCategory = validCategories.includes(obj.mediaType as MediaCategory)
     ? (obj.mediaType as MediaCategory)
     : "unknown";
@@ -120,6 +150,7 @@ export function validateAsset(raw: unknown): { ok: true; data: ProjectAsset } | 
     data: {
       id: (obj.id as string).trim(),
       name: (obj.name as string).trim(),
+      kind,
       mediaType,
       mimeType: typeof obj.mimeType === "string" ? obj.mimeType.trim() : "",
       size: Math.floor(obj.size),
@@ -252,6 +283,70 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
       const volume = typeof cl.volume === "number" && Number.isFinite(cl.volume) ? Math.max(0, Math.min(1, cl.volume)) : 1;
       const muted = typeof cl.muted === "boolean" ? cl.muted : false;
 
+      const validFitModes: ClipFitMode[] = ["fit", "fill", "blur-bg"];
+      const fitMode: ClipFitMode = validFitModes.includes(cl.fitMode as ClipFitMode)
+        ? (cl.fitMode as ClipFitMode)
+        : "fit";
+
+      let crop: ClipCrop = { top: 0, right: 0, bottom: 0, left: 0 };
+      if (typeof cl.crop === "object" && cl.crop !== null) {
+        const cr = cl.crop as Record<string, unknown>;
+        const parseSide = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 0.5 ? v : 0);
+        crop = {
+          top: parseSide(cr.top),
+          right: parseSide(cr.right),
+          bottom: parseSide(cr.bottom),
+          left: parseSide(cr.left),
+        };
+      }
+
+      const flipH = typeof cl.flipH === "boolean" ? cl.flipH : false;
+      const flipV = typeof cl.flipV === "boolean" ? cl.flipV : false;
+      const fadeIn = typeof cl.fadeIn === "number" && Number.isFinite(cl.fadeIn) && cl.fadeIn >= 0 ? cl.fadeIn : 0;
+      const fadeOut = typeof cl.fadeOut === "number" && Number.isFinite(cl.fadeOut) && cl.fadeOut >= 0 ? cl.fadeOut : 0;
+      const audioDetached = typeof cl.audioDetached === "boolean" ? cl.audioDetached : false;
+
+      if (typeof cl.playbackRate !== "number" || !Number.isFinite(cl.playbackRate) || cl.playbackRate < 0.25 || cl.playbackRate > 4.0) {
+        return { ok: false, error: `Clip "${String(cl.id)}" playbackRate must be a number between 0.25 and 4.0.` };
+      }
+      const playbackRate = cl.playbackRate;
+
+      if (typeof cl.preservePitch !== "boolean") {
+        return { ok: false, error: `Clip "${String(cl.id)}" preservePitch must be a boolean.` };
+      }
+      const preservePitch = cl.preservePitch;
+
+      let freezeFrameSourceTime: number | null = null;
+      if (cl.freezeFrameSourceTime !== null && cl.freezeFrameSourceTime !== undefined) {
+        if (typeof cl.freezeFrameSourceTime !== "number" || !Number.isFinite(cl.freezeFrameSourceTime) || cl.freezeFrameSourceTime < 0) {
+          return { ok: false, error: `Clip "${String(cl.id)}" freezeFrameSourceTime must be null or a non-negative number.` };
+        }
+        freezeFrameSourceTime = cl.freezeFrameSourceTime;
+      }
+
+      if (typeof cl.color !== "object" || cl.color === null) {
+        return { ok: false, error: `Clip "${String(cl.id)}" color must be an object.` };
+      }
+      const rawColor = cl.color as Record<string, unknown>;
+      const validColorPresets: ColorPresetId[] = ["none", "vivid", "warm", "cool", "bw", "cinematic"];
+      if (typeof rawColor.presetId !== "string" || !validColorPresets.includes(rawColor.presetId as ColorPresetId)) {
+        return { ok: false, error: `Clip "${String(cl.id)}" color.presetId must be one of: ${validColorPresets.join(", ")}.` };
+      }
+      for (const prop of ["brightness", "contrast", "saturation", "exposure", "temperature"] as const) {
+        const v = rawColor[prop];
+        if (typeof v !== "number" || !Number.isFinite(v) || v < -100 || v > 100) {
+          return { ok: false, error: `Clip "${String(cl.id)}" color.${prop} must be a number between -100 and 100.` };
+        }
+      }
+      const color: ColorAdjustments = {
+        presetId: rawColor.presetId as ColorPresetId,
+        brightness: rawColor.brightness as number,
+        contrast: rawColor.contrast as number,
+        saturation: rawColor.saturation as number,
+        exposure: rawColor.exposure as number,
+        temperature: rawColor.temperature as number,
+      };
+
       const clipItem: TimelineClip = {
         id: (cl.id as string).trim(),
         assetId: (cl.assetId as string).trim(),
@@ -261,6 +356,17 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
         sourceOut,
         volume,
         muted,
+        fitMode,
+        crop,
+        flipH,
+        flipV,
+        fadeIn,
+        fadeOut,
+        audioDetached,
+        playbackRate,
+        preservePitch,
+        freezeFrameSourceTime,
+        color,
       };
 
       if (typeof cl.groupId === "string" && cl.groupId.trim().length > 0) {
@@ -269,24 +375,67 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
       if (typeof cl.linkedClipId === "string" && cl.linkedClipId.trim().length > 0) {
         clipItem.linkedClipId = cl.linkedClipId.trim();
       }
-      if (typeof cl.speed === "number" && Number.isFinite(cl.speed) && cl.speed > 0) {
-        clipItem.speed = cl.speed;
-      }
 
       clips.push(clipItem);
     }
+
+    const validRoles: TrackAudioRole[] = ["dialogue", "music", "sfx", "general"];
+    if (typeof tr.audioRole !== "string" || !validRoles.includes(tr.audioRole as TrackAudioRole)) {
+      return { ok: false, error: `Track "${String(tr.id)}" audioRole must be one of: ${validRoles.join(", ")}.` };
+    }
+    const audioRole = tr.audioRole as TrackAudioRole;
+
+    if (typeof tr.ducking !== "object" || tr.ducking === null) {
+      return { ok: false, error: `Track "${String(tr.id)}" ducking configuration must be an object.` };
+    }
+    const rawDucking = tr.ducking as Record<string, unknown>;
+    if (typeof rawDucking.enabled !== "boolean") {
+      return { ok: false, error: `Track "${String(tr.id)}" ducking.enabled must be a boolean.` };
+    }
+    if (
+      typeof rawDucking.reductionDb !== "number" ||
+      !Number.isFinite(rawDucking.reductionDb) ||
+      rawDucking.reductionDb < -30 ||
+      rawDucking.reductionDb > -3
+    ) {
+      return { ok: false, error: `Track "${String(tr.id)}" ducking.reductionDb must be a number between -30 and -3.` };
+    }
+    if (
+      typeof rawDucking.attackMs !== "number" ||
+      !Number.isFinite(rawDucking.attackMs) ||
+      rawDucking.attackMs < 20 ||
+      rawDucking.attackMs > 1000
+    ) {
+      return { ok: false, error: `Track "${String(tr.id)}" ducking.attackMs must be a number between 20 and 1000.` };
+    }
+    if (
+      typeof rawDucking.releaseMs !== "number" ||
+      !Number.isFinite(rawDucking.releaseMs) ||
+      rawDucking.releaseMs < 50 ||
+      rawDucking.releaseMs > 2000
+    ) {
+      return { ok: false, error: `Track "${String(tr.id)}" ducking.releaseMs must be a number between 50 and 2000.` };
+    }
+    const ducking: TrackDuckingConfig = {
+      enabled: rawDucking.enabled,
+      reductionDb: rawDucking.reductionDb,
+      attackMs: rawDucking.attackMs,
+      releaseMs: rawDucking.releaseMs,
+    };
 
     const trackItem: TimelineTrack = {
       id: (tr.id as string).trim(),
       type: tr.type as TrackType,
       name: (tr.name as string).trim(),
       order: typeof tr.order === "number" && Number.isFinite(tr.order) ? tr.order : i,
+      locked: typeof tr.locked === "boolean" ? tr.locked : false,
       muted: typeof tr.muted === "boolean" ? tr.muted : false,
+      hidden: typeof tr.hidden === "boolean" ? tr.hidden : false,
       clips,
+      audioRole,
+      ducking,
     };
 
-    if (typeof tr.locked === "boolean") trackItem.locked = tr.locked;
-    if (typeof tr.hidden === "boolean") trackItem.hidden = tr.hidden;
     if (typeof tr.solo === "boolean") trackItem.solo = tr.solo;
     if (typeof tr.syncLocked === "boolean") trackItem.syncLocked = tr.syncLocked;
     if (typeof tr.volume === "number" && Number.isFinite(tr.volume)) trackItem.volume = tr.volume;
@@ -313,6 +462,13 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
       const fontSize = typeof ov.fontSize === "number" && Number.isFinite(ov.fontSize) ? Math.max(8, Math.min(200, ov.fontSize)) : 32;
       const color = typeof ov.color === "string" && ov.color.trim().length > 0 ? ov.color.trim() : "#ffffff";
       const align = ov.align === "left" || ov.align === "right" ? ov.align : "center";
+      const validPresets: CaptionPresetId[] = ["classic", "bold-karaoke", "pill", "minimal", "custom"];
+      const presetId: CaptionPresetId = validPresets.includes(ov.presetId as CaptionPresetId)
+        ? (ov.presetId as CaptionPresetId)
+        : "classic";
+      const activeWordColor = typeof ov.activeWordColor === "string" && ov.activeWordColor.trim().length > 0
+        ? ov.activeWordColor.trim()
+        : "#facc15";
 
       textOverlays.push({
         id: (ov.id as string).trim(),
@@ -324,6 +480,8 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
         fontSize,
         color,
         align,
+        presetId,
+        activeWordColor,
       });
     }
   }
@@ -360,10 +518,9 @@ export function validateTimelineDocument(raw: unknown): { ok: true; data: Timeli
     id: (obj.id as string).trim(),
     tracks,
     textOverlays,
+    markers,
     settings,
   };
-
-  if (markers.length > 0) timelineDoc.markers = markers;
   if (typeof obj.inPoint === "number" && Number.isFinite(obj.inPoint)) timelineDoc.inPoint = obj.inPoint;
   if (typeof obj.outPoint === "number" && Number.isFinite(obj.outPoint)) timelineDoc.outPoint = obj.outPoint;
   if (typeof obj.timebase === "object" && obj.timebase !== null) {

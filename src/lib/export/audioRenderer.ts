@@ -17,6 +17,11 @@
 
 import { AudioSample, type AudioSampleSink } from "mediabunny";
 import type { RenderPlan, RenderPlanAudioSegment } from "../../types/export.ts";
+import {
+  collectDialogueIntervals,
+  evaluateDuckingGainAtTime,
+  type TimeInterval,
+} from "./audioDucking.ts";
 
 export interface DecodedClipBuffer {
   clipId: string;
@@ -68,6 +73,66 @@ export function resampleAudioChannel(
 }
 
 /**
+ * Time-scale modification with pitch preservation using Overlap-Add (OLA) with Hann windowing.
+ * Deterministic, click-free 40ms Hann-windowed frames with 50% overlap.
+ */
+export function timeStretchOLA(
+  source: Float32Array,
+  targetLength: number,
+  sampleRate: number = 48000
+): Float32Array {
+  if (source.length === 0 || targetLength === 0) {
+    return new Float32Array(targetLength);
+  }
+  if (source.length === targetLength) {
+    return new Float32Array(source);
+  }
+
+  const result = new Float32Array(targetLength);
+  const norm = new Float32Array(targetLength);
+
+  // 40ms Hann window
+  let windowSize = Math.max(16, Math.round(sampleRate * 0.04));
+  if (windowSize % 2 !== 0) windowSize++;
+  const sHop = Math.floor(windowSize / 2); // 50% overlap
+
+  const speedRatio = source.length / targetLength;
+  const aHop = Math.max(1, Math.round(sHop * speedRatio));
+
+  // Precompute Hann window
+  const win = new Float32Array(windowSize);
+  for (let i = 0; i < windowSize; i++) {
+    win[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (windowSize - 1)));
+  }
+
+  let k = 0;
+  while (true) {
+    const outPos = k * sHop;
+    const inPos = Math.round(k * aHop);
+    if (outPos >= targetLength || inPos >= source.length) break;
+
+    for (let n = 0; n < windowSize; n++) {
+      const dIdx = outPos + n;
+      if (dIdx >= targetLength) break;
+      const sIdx = inPos + n;
+      const val = sIdx < source.length ? source[sIdx] : 0;
+      result[dIdx] += val * win[n];
+      norm[dIdx] += win[n];
+    }
+    k++;
+  }
+
+  // Normalize by window overlap
+  for (let i = 0; i < targetLength; i++) {
+    if (norm[i] > 1e-4) {
+      result[i] /= norm[i];
+    }
+  }
+
+  return result;
+}
+
+/**
  * Applies a smooth 3ms Hann ramp at the start and end of a clip to prevent DC offset clicks.
  */
 export function applyBoundaryMicroFades(
@@ -104,6 +169,7 @@ export class AudioTrackMixer {
   readonly totalAudioSamples: number;
 
   private decodedClips = new Map<string, DecodedClipBuffer>();
+  private dialogueIntervals: TimeInterval[] = [];
 
   constructor(
     plan: RenderPlan,
@@ -115,6 +181,9 @@ export class AudioTrackMixer {
     this.outputSampleRate = options.outputSampleRate || plan.settings.audioSampleRate || 48000;
     this.outputChannels = options.outputChannels || plan.settings.audioChannels || 2;
     this.totalAudioSamples = Math.round(plan.totalDurationSeconds * this.outputSampleRate);
+    if (plan.timeline) {
+      this.dialogueIntervals = collectDialogueIntervals(plan.timeline);
+    }
   }
 
   /**
@@ -165,12 +234,33 @@ export class AudioTrackMixer {
       const cLeft = clipBuffer.left;
       const cRight = clipBuffer.right;
       const vol = segment.volume;
+      const totalClipSamples = clipEnd - clipStart;
+      const fadeInSamples = Math.round((segment.fadeIn || 0) * this.outputSampleRate);
+      const fadeOutSamples = Math.round((segment.fadeOut || 0) * this.outputSampleRate);
+      const duckingConfig = segment.ducking?.enabled ? segment.ducking : null;
 
       for (let i = 0; i < overlapLen; i++) {
         const sIdx = srcOffset + i;
         if (sIdx < cLeft.length) {
-          mixLeft[destOffset + i] += cLeft[sIdx] * vol;
-          mixRight[destOffset + i] += cRight[sIdx] * vol;
+          let envelopeGain = 1.0;
+          if (fadeInSamples > 0 && sIdx < fadeInSamples) {
+            envelopeGain *= sIdx / fadeInSamples;
+          }
+          const samplesRemaining = totalClipSamples - sIdx;
+          if (fadeOutSamples > 0 && samplesRemaining < fadeOutSamples) {
+            envelopeGain *= Math.max(0, samplesRemaining / fadeOutSamples);
+          }
+          if (duckingConfig) {
+            const currentSampleTime = (overlapStart + i) / this.outputSampleRate;
+            envelopeGain *= evaluateDuckingGainAtTime(
+              currentSampleTime,
+              this.dialogueIntervals,
+              duckingConfig
+            );
+          }
+
+          mixLeft[destOffset + i] += cLeft[sIdx] * vol * envelopeGain;
+          mixRight[destOffset + i] += cRight[sIdx] * vol * envelopeGain;
         }
       }
     }
@@ -282,9 +372,35 @@ export class AudioTrackMixer {
       const slicedL = combinedL.subarray(skipFrames, skipFrames + neededSourceFrames);
       const slicedR = combinedR.subarray(skipFrames, skipFrames + neededSourceFrames);
 
-      // Resample to target output rate
-      const resampledL = resampleAudioChannel(slicedL, sourceRate, this.outputSampleRate, expectedFrames);
-      const resampledR = resampleAudioChannel(slicedR, sourceRate, this.outputSampleRate, expectedFrames);
+      // Resample to target output rate & stretch/compress according to playbackRate
+      const playbackRate = segment.playbackRate || 1.0;
+      const preservePitch = segment.preservePitch ?? true;
+
+      let resampledL: Float32Array;
+      let resampledR: Float32Array;
+
+      if (Math.abs(playbackRate - 1.0) < 0.001) {
+        resampledL = resampleAudioChannel(slicedL, sourceRate, this.outputSampleRate, expectedFrames);
+        resampledR = resampleAudioChannel(slicedR, sourceRate, this.outputSampleRate, expectedFrames);
+      } else {
+        // Step 1: convert source to output sample rate
+        const baseSourceFramesAtOutputRate = Math.max(1, Math.round((sourceOut - sourceIn) * this.outputSampleRate));
+        const baseL = (sourceRate === this.outputSampleRate && slicedL.length === baseSourceFramesAtOutputRate)
+          ? slicedL
+          : resampleAudioChannel(slicedL, sourceRate, this.outputSampleRate, baseSourceFramesAtOutputRate);
+        const baseR = (sourceRate === this.outputSampleRate && slicedR.length === baseSourceFramesAtOutputRate)
+          ? slicedR
+          : resampleAudioChannel(slicedR, sourceRate, this.outputSampleRate, baseSourceFramesAtOutputRate);
+
+        // Step 2: time stretch or pitch-shifting resampling
+        if (preservePitch) {
+          resampledL = timeStretchOLA(baseL, expectedFrames, this.outputSampleRate);
+          resampledR = timeStretchOLA(baseR, expectedFrames, this.outputSampleRate);
+        } else {
+          resampledL = resampleAudioChannel(baseL, this.outputSampleRate, this.outputSampleRate, expectedFrames);
+          resampledR = resampleAudioChannel(baseR, this.outputSampleRate, this.outputSampleRate, expectedFrames);
+        }
+      }
 
       // Apply 3ms boundary micro-fades
       applyBoundaryMicroFades(resampledL, resampledR, this.outputSampleRate);

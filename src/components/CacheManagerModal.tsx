@@ -28,6 +28,7 @@ import {
   deleteSpeechModel,
   clearAllSpeechModels,
   type SpeechModelStorageReport,
+  type SpeechModelId,
 } from "../lib/transcription/modelStorage.ts";
 import { formatBytes } from "../lib/projectValidation.ts";
 import { Button, Modal, Badge, Divider } from "@/components/ui";
@@ -158,7 +159,7 @@ export function CacheManagerModal({
 
   // ── Speech Model Manual Actions ─────────────────────────────────────────────
   const handleDeleteSpeechModel = async (
-    modelId: "whisper-tiny_timestamped" | "whisper-base_timestamped" | "whisper-tiny" | "whisper-base",
+    modelId: SpeechModelId,
     label: string
   ) => {
     setSpeechActionLoading(modelId);
@@ -490,10 +491,17 @@ export function CacheManagerModal({
                       className="p-3 flex items-center justify-between gap-3 hover:bg-cs-bg-base/30 transition-colors"
                     >
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="info">{m.tier.toUpperCase()}</Badge>
                           <span className="font-semibold text-cs-text-primary text-xs truncate">
                             {m.label}
                           </span>
+                          {m.recommendedBadge && (
+                            <Badge variant="default">{m.recommendedBadge}</Badge>
+                          )}
+                          {m.requiresWebGpu && (
+                            <Badge variant="warning">WebGPU Required</Badge>
+                          )}
                           {m.isDownloaded ? (
                             <Badge variant="success">
                               Downloaded ({formatBytes(m.actualSizeBytes)})
@@ -504,6 +512,9 @@ export function CacheManagerModal({
                             </Badge>
                           )}
                         </div>
+                        <p className="text-[11px] text-cs-text-secondary mt-1">
+                          <span className="font-medium text-cs-text-primary">{m.languages}</span> • {m.hardwareRequirement}
+                        </p>
                         <p className="text-[11px] text-cs-text-tertiary mt-0.5 truncate">
                           {m.description}
                         </p>

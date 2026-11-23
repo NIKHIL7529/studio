@@ -13,8 +13,6 @@ import type {
   TransitionFamily,
   TransitionParams,
   TimelineTransition,
-  TimelineClip,
-  TimelineDocument,
 } from "../../types/timeline.ts";
 
 export interface TransitionDefinition {
@@ -27,7 +25,7 @@ export interface TransitionDefinition {
     name: keyof TransitionParams;
     label: string;
     type: "color" | "number" | "select";
-    default: any;
+    default: string | number | boolean;
     min?: number;
     max?: number;
     step?: number;

@@ -15,7 +15,7 @@
 
 import * as React from "react";
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { TimelineDocument, TimelineClip, TextOverlay } from "../../types/timeline.ts";
+import type { TimelineDocument, TimelineClip, TimelineTransition, TextOverlay } from "../../types/timeline.ts";
 import type { LiveAssetItem } from "../../types/project.ts";
 import { getActiveClipAtTime, getActiveTextOverlaysAtTime, getTimelineDuration } from "../../lib/timeline/model.ts";
 import { ObjectUrlManager } from "../../lib/media/previewSource.ts";
@@ -24,7 +24,18 @@ import {
   getTransitionProgress,
   getTransitionDefinition,
   getTransitionTimeWindow,
+  type TransitionDefinition,
 } from "../../lib/transitions/transitionCatalog.ts";
+import {
+  buildCanvasColorFilter,
+  getTemperatureTint,
+  isDefaultColor,
+} from "../../lib/color/colorPresets.ts";
+import {
+  collectDialogueIntervals,
+  evaluateDuckingGainAtTime,
+} from "../../lib/export/audioDucking.ts";
+import { useEditorStore } from "../../store/editorStore.ts";
 
 export interface TimelinePreviewProps {
   timeline: TimelineDocument;
@@ -33,6 +44,7 @@ export interface TimelinePreviewProps {
   isPlaying: boolean;
   onPlaybackTimeUpdate: (time: number) => void;
   onPlayPause: () => void;
+  onTimelineChange?: (newTimeline: TimelineDocument) => void;
 }
 
 function formatTimeDisplay(seconds: number): string {
@@ -49,16 +61,31 @@ export function TimelinePreview({
   isPlaying,
   onPlaybackTimeUpdate,
   onPlayPause,
+  onTimelineChange,
 }: TimelinePreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const urlManagerRef = useRef<ObjectUrlManager>(new ObjectUrlManager());
+
+  // Zustand editor store integration for canvas manipulation
+  const {
+    selectedClipIds,
+    selectedOverlayId,
+    selectSingleClip,
+    selectOverlay,
+    setDragPreview,
+  } = useEditorStore();
+
+  const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number }>({});
+  const [editingOverlayId, setEditingOverlayId] = useState<string | null>(null);
+  const [inlineEditText, setInlineEditText] = useState("");
 
   // Tracking state to prevent duplicate object URL creation & handle file resolution races
   const currentLoadedAssetIdRef = useRef<string | null>(null);
   const currentLoadedFileRef = useRef<File | null>(null);
   const activeClipIdRef = useRef<string | null>(null);
   const activeUrlRef = useRef<string | null>(null);
+  const [activeMediaUrl, setActiveMediaUrl] = useState<string | null>(null);
 
   const rafRef = useRef<number | null>(null);
   const isPlayingRef = useRef(isPlaying);
@@ -131,12 +158,50 @@ export function TimelinePreview({
       return { transition: tr, progress: prog, def: getTransitionDefinition(tr.type) };
     }
     return null;
-  }).filter(Boolean) as { transition: any; progress: number; def: any }[];
+  }).filter(Boolean) as { transition: TimelineTransition; progress: number; def: TransitionDefinition | undefined }[];
 
   // Active clip asset info
   const activeLiveItem = activeClip ? liveAssets.get(activeClip.assetId) : null;
   const activeFile = activeLiveItem?.file ?? null;
   const isFileMissing = activeClip ? (!activeLiveItem || activeLiveItem.status !== "ready" || !activeFile) : false;
+  const isImageMedia = activeLiveItem?.asset.kind === "image" || activeLiveItem?.asset.mediaType === "image";
+
+  const crop = activeClip?.crop || { top: 0, right: 0, bottom: 0, left: 0 };
+  const clipPath = (crop.top > 0 || crop.right > 0 || crop.bottom > 0 || crop.left > 0)
+    ? `inset(${crop.top * 100}% ${crop.right * 100}% ${crop.bottom * 100}% ${crop.left * 100}%)`
+    : undefined;
+  const scaleX = (evaluatedTransform?.scaleX ?? 1) * (activeClip?.flipH ? -1 : 1);
+  const scaleY = (evaluatedTransform?.scaleY ?? 1) * (activeClip?.flipV ? -1 : 1);
+  const transformStyle = evaluatedTransform
+    ? `translate(${evaluatedTransform.positionX}%, ${evaluatedTransform.positionY}%) scale(${scaleX}, ${scaleY}) rotate(${evaluatedTransform.rotation}deg)`
+    : undefined;
+  const hasColorFilter = activeClip?.color && !isDefaultColor(activeClip.color);
+  const colorFilterStyle = hasColorFilter ? buildCanvasColorFilter(activeClip.color) : undefined;
+  const tempTint = activeClip?.color ? getTemperatureTint(activeClip.color.temperature) : null;
+
+  const mediaNaturalW =
+    activeLiveItem?.asset.metadata?.displayWidth ||
+    activeLiveItem?.asset.metadata?.videoTracks?.[0]?.displayWidth ||
+    compSize.width ||
+    1920;
+  const mediaNaturalH =
+    activeLiveItem?.asset.metadata?.displayHeight ||
+    activeLiveItem?.asset.metadata?.videoTracks?.[0]?.displayHeight ||
+    compSize.height ||
+    1080;
+  const aspectSource = mediaNaturalW / (mediaNaturalH || 1);
+  const aspectCanvas = (compSize.width || 1) / (compSize.height || 1);
+
+  let fittedWidthPct = 100;
+  let fittedHeightPct = 100;
+
+  if (activeClip?.fitMode === "fit" || activeClip?.fitMode === "blur-bg") {
+    if (aspectSource > aspectCanvas) {
+      fittedHeightPct = Math.min(100, (aspectCanvas / aspectSource) * 100);
+    } else {
+      fittedWidthPct = Math.min(100, (aspectSource / aspectCanvas) * 100);
+    }
+  }
 
   // Load or reuse media source
   const loadClip = useCallback((clip: TimelineClip | null, file: File | null) => {
@@ -149,6 +214,7 @@ export function TimelinePreview({
       if (activeUrlRef.current) {
         manager.revoke(activeUrlRef.current);
         activeUrlRef.current = null;
+        setActiveMediaUrl(null);
       }
       try {
         video.pause();
@@ -167,13 +233,22 @@ export function TimelinePreview({
       activeClipIdRef.current = clip.id;
       // Just seek to target timestamp within the already loaded media
       const clipOffset = Math.max(0, currentTimeRef.current - clip.startTime);
-      const targetSrc = Math.min(clip.sourceOut, clip.sourceIn + clipOffset);
+      const isFreeze = clip.freezeFrameSourceTime !== null;
+      const targetSrc = isFreeze
+        ? clip.freezeFrameSourceTime!
+        : Math.min(clip.sourceOut, clip.sourceIn + clipOffset * (clip.playbackRate || 1.0));
       try {
         video.currentTime = targetSrc;
       } catch { /* ignored */ }
-      video.muted = clip.muted;
+      video.muted = isFreeze || clip.muted;
       video.volume = Math.max(0, Math.min(1, clip.volume));
-      if (isPlayingRef.current && video.paused) {
+      video.playbackRate = clip.playbackRate || 1.0;
+      if ("preservesPitch" in video) {
+        (video as unknown as { preservesPitch: boolean }).preservesPitch = clip.preservePitch ?? true;
+      }
+      if (isFreeze) {
+        try { video.pause(); } catch { /* ignored */ }
+      } else if (isPlayingRef.current && video.paused) {
         video.play().catch(() => setPlaybackBlocked(true));
       }
       return;
@@ -183,6 +258,7 @@ export function TimelinePreview({
     if (activeUrlRef.current) {
       manager.revoke(activeUrlRef.current);
       activeUrlRef.current = null;
+      setActiveMediaUrl(null);
     }
 
     setIsLoadingMedia(true);
@@ -191,13 +267,19 @@ export function TimelinePreview({
     try {
       const url = manager.create(file);
       activeUrlRef.current = url;
+      setActiveMediaUrl(url);
       currentLoadedAssetIdRef.current = clip.assetId;
       currentLoadedFileRef.current = file;
       activeClipIdRef.current = clip.id;
 
       video.src = url;
-      video.muted = clip.muted;
+      const isFreeze = clip.freezeFrameSourceTime !== null;
+      video.muted = isFreeze || clip.muted;
       video.volume = Math.max(0, Math.min(1, clip.volume));
+      video.playbackRate = clip.playbackRate || 1.0;
+      if ("preservesPitch" in video) {
+        (video as unknown as { preservesPitch: boolean }).preservesPitch = clip.preservePitch ?? true;
+      }
       video.load();
     } catch (err: unknown) {
       console.warn("TimelinePreview: failed to create object URL", err);
@@ -226,12 +308,17 @@ export function TimelinePreview({
       if (!clip) return;
 
       const clipOffset = Math.max(0, currentTimeRef.current - clip.startTime);
-      const targetSrc = Math.min(clip.sourceOut, clip.sourceIn + clipOffset);
+      const isFreeze = clip.freezeFrameSourceTime !== null;
+      const targetSrc = isFreeze
+        ? clip.freezeFrameSourceTime!
+        : Math.min(clip.sourceOut, clip.sourceIn + clipOffset * (clip.playbackRate || 1.0));
       try {
         video.currentTime = targetSrc;
       } catch { /* ignored */ }
 
-      if (isPlayingRef.current) {
+      if (isFreeze) {
+        try { video.pause(); } catch { /* ignored */ }
+      } else if (isPlayingRef.current) {
         video.play()
           .then(() => setPlaybackBlocked(false))
           .catch(() => setPlaybackBlocked(true));
@@ -296,15 +383,29 @@ export function TimelinePreview({
         const currentClip = getActiveClipAtTime(timelineRef.current, newTime);
         const vid = videoRef.current;
         if (currentClip && vid && vid.readyState >= 2) {
-          const expectedSrcTime = currentClip.sourceIn + (newTime - currentClip.startTime);
-          const drift = Math.abs(vid.currentTime - expectedSrcTime);
-          if (drift > 0.35) {
-            try {
-              vid.currentTime = Math.min(currentClip.sourceOut, Math.max(currentClip.sourceIn, expectedSrcTime));
-            } catch { /* ignored */ }
-          }
-          if (vid.paused && !playbackBlocked) {
-            vid.play().catch(() => setPlaybackBlocked(true));
+          const isFreeze = currentClip.freezeFrameSourceTime !== null;
+          if (isFreeze) {
+            if (!vid.paused) {
+              try { vid.pause(); } catch { /* ignored */ }
+            }
+            if (Math.abs(vid.currentTime - currentClip.freezeFrameSourceTime!) > 0.05) {
+              try { vid.currentTime = currentClip.freezeFrameSourceTime!; } catch { /* ignored */ }
+            }
+          } else {
+            vid.playbackRate = currentClip.playbackRate || 1.0;
+            if ("preservesPitch" in vid) {
+              (vid as unknown as { preservesPitch: boolean }).preservesPitch = currentClip.preservePitch ?? true;
+            }
+            const expectedSrcTime = currentClip.sourceIn + (newTime - currentClip.startTime) * (currentClip.playbackRate || 1.0);
+            const drift = Math.abs(vid.currentTime - expectedSrcTime);
+            if (drift > 0.35) {
+              try {
+                vid.currentTime = Math.min(currentClip.sourceOut, Math.max(currentClip.sourceIn, expectedSrcTime));
+              } catch { /* ignored */ }
+            }
+            if (vid.paused && !playbackBlocked) {
+              vid.play().catch(() => setPlaybackBlocked(true));
+            }
           }
         }
       }
@@ -330,7 +431,10 @@ export function TimelinePreview({
     if (!video || !activeClip) return;
 
     const clipOffset = Math.max(0, currentTime - activeClip.startTime);
-    const targetSrc = Math.min(activeClip.sourceOut, activeClip.sourceIn + clipOffset);
+    const isFreeze = activeClip.freezeFrameSourceTime !== null;
+    const targetSrc = isFreeze
+      ? activeClip.freezeFrameSourceTime!
+      : Math.min(activeClip.sourceOut, activeClip.sourceIn + clipOffset * (activeClip.playbackRate || 1.0));
     if (Math.abs(video.currentTime - targetSrc) > 0.05) {
       try { video.currentTime = targetSrc; } catch { /* ignored */ }
     }
@@ -340,20 +444,156 @@ export function TimelinePreview({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !activeClip) return;
-    video.muted = activeClip.muted;
-    video.volume = Math.max(0, Math.min(1, activeClip.volume));
-  }, [activeClip]);
+    const activeTrack = timeline.tracks.find((t) => t.id === activeClip.trackId);
+    let duckingGain = 1.0;
+    if (activeTrack?.ducking?.enabled) {
+      const dialogueIntervals = collectDialogueIntervals(timeline);
+      duckingGain = evaluateDuckingGainAtTime(currentTime, dialogueIntervals, activeTrack.ducking);
+    }
+    video.muted = activeClip.muted || !!activeTrack?.muted;
+    video.volume = Math.max(0, Math.min(1, activeClip.volume * duckingGain));
+  }, [activeClip, timeline, currentTime]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    const manager = urlManagerRef.current;
-    return () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
+  // Pointer drag handler for active clip frame
+  const handleClipPointerDown = (e: React.PointerEvent) => {
+    if (!activeClip || !onTimelineChange) return;
+    if (e.button !== 0) return;
+    selectSingleClip(activeClip.id);
+
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const initialPosX = evaluatedTransform?.positionX ?? 0;
+    const initialPosY = evaluatedTransform?.positionY ?? 0;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startClientX;
+      const dy = ev.clientY - startClientY;
+
+      let newPosX = initialPosX + (dx / (compSize.width || 1)) * 100;
+      let newPosY = initialPosY + (dy / (compSize.height || 1)) * 100;
+
+      const guides: { x?: number; y?: number } = {};
+      if (Math.abs(newPosX) < 1.5) {
+        newPosX = 0;
+        guides.x = compSize.width * 0.5;
       }
-      manager.revokeAll();
+      if (Math.abs(newPosY) < 1.5) {
+        newPosY = 0;
+        guides.y = compSize.height * 0.5;
+      }
+
+      setSnapGuides(guides);
+      setDragPreview({ clipId: activeClip.id, deltaX: dx, deltaY: dy });
     };
-  }, []);
+
+    const onPointerUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      setSnapGuides({});
+      setDragPreview(null);
+
+      const dx = ev.clientX - startClientX;
+      const dy = ev.clientY - startClientY;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+      let finalPosX = initialPosX + (dx / (compSize.width || 1)) * 100;
+      let finalPosY = initialPosY + (dy / (compSize.height || 1)) * 100;
+      if (Math.abs(finalPosX) < 1.5) finalPosX = 0;
+      if (Math.abs(finalPosY) < 1.5) finalPosY = 0;
+
+      const updatedTracks = timeline.tracks.map((t) => ({
+        ...t,
+        clips: t.clips.map((c) => {
+          if (c.id !== activeClip.id) return c;
+          const kfs = c.keyframes || [];
+          const updatedKfs = [
+            ...kfs.filter((k) => k.property !== "positionX" && k.property !== "positionY"),
+            { id: crypto.randomUUID(), time: 0, property: "positionX" as const, value: Number(finalPosX.toFixed(1)), interpolation: "linear" as const },
+            { id: crypto.randomUUID(), time: 0, property: "positionY" as const, value: Number(finalPosY.toFixed(1)), interpolation: "linear" as const },
+          ];
+          return { ...c, keyframes: updatedKfs };
+        }),
+      }));
+      onTimelineChange({ ...timeline, tracks: updatedTracks });
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  // Pointer drag handler for text overlays & captions
+  const handleOverlayPointerDown = (e: React.PointerEvent, overlay: TextOverlay) => {
+    e.stopPropagation();
+    selectOverlay(overlay.id);
+
+    const startClientX = e.clientX;
+    const startClientY = e.clientY;
+    const origX = overlay.x;
+    const origY = overlay.y;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startClientX;
+      const dy = ev.clientY - startClientY;
+
+      let newX = origX + dx / (compSize.width || 1);
+      let newY = origY + dy / (compSize.height || 1);
+
+      const guides: { x?: number; y?: number } = {};
+      if (Math.abs(newX - 0.5) < 0.02) {
+        newX = 0.5;
+        guides.x = compSize.width * 0.5;
+      }
+      if (Math.abs(newY - 0.5) < 0.02) {
+        newY = 0.5;
+        guides.y = compSize.height * 0.5;
+      }
+
+      setSnapGuides(guides);
+      setDragPreview({ overlayId: overlay.id, deltaX: dx, deltaY: dy });
+    };
+
+    const onPointerUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      setSnapGuides({});
+      setDragPreview(null);
+
+      const dx = ev.clientX - startClientX;
+      const dy = ev.clientY - startClientY;
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+
+      let finalX = origX + dx / (compSize.width || 1);
+      let finalY = origY + dy / (compSize.height || 1);
+      if (Math.abs(finalX - 0.5) < 0.02) finalX = 0.5;
+      if (Math.abs(finalY - 0.5) < 0.02) finalY = 0.5;
+
+      finalX = Math.max(0.05, Math.min(0.95, Number(finalX.toFixed(3))));
+      finalY = Math.max(0.05, Math.min(0.95, Number(finalY.toFixed(3))));
+
+      if (onTimelineChange) {
+        const updated = timeline.textOverlays.map((o) =>
+          o.id === overlay.id ? { ...o, x: finalX, y: finalY } : o
+        );
+        onTimelineChange({ ...timeline, textOverlays: updated });
+      }
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
+  const handleCommitInlineEdit = (overlayId: string) => {
+    if (!onTimelineChange) return;
+    if (inlineEditText.trim()) {
+      const updated = timeline.textOverlays.map((o) =>
+        o.id === overlayId ? { ...o, text: inlineEditText.trim() } : o
+      );
+      onTimelineChange({ ...timeline, textOverlays: updated });
+    }
+    setEditingOverlayId(null);
+  };
+
+  const isClipSelected = activeClip ? selectedClipIds.includes(activeClip.id) : false;
 
   const hasTimeline = totalDuration > 0;
 
@@ -385,34 +625,159 @@ export function TimelinePreview({
             maxHeight: "100%",
           }}
         >
-          {/* Video element */}
-          <video
-            ref={videoRef}
-            className={`w-full h-full object-contain ${!activeClip || isFileMissing ? "hidden" : ""}`}
-            style={{
-              transform: evaluatedTransform
-                ? `translate(${evaluatedTransform.positionX}%, ${evaluatedTransform.positionY}%) scale(${evaluatedTransform.scaleX}, ${evaluatedTransform.scaleY}) rotate(${evaluatedTransform.rotation}deg)`
-                : undefined,
-              opacity: evaluatedTransform ? evaluatedTransform.opacity : undefined,
-              transformOrigin: "center center",
-            }}
-            playsInline
-            onClick={() => {
-              if (playbackBlocked) {
-                setPlaybackBlocked(false);
-                videoRef.current?.play().catch(() => { });
-              } else {
-                onPlayPause();
-              }
-            }}
-          />
+          {/* Blur-bg background layer when fitMode === "blur-bg" */}
+          {activeClip && !isFileMissing && activeClip.fitMode === "blur-bg" && activeMediaUrl && (
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+              {isImageMedia ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={activeMediaUrl}
+                  alt=""
+                  className="w-full h-full object-cover filter blur-xl scale-125 opacity-70"
+                />
+              ) : (
+                <video
+                  src={activeMediaUrl}
+                  className="w-full h-full object-cover filter blur-xl scale-125 opacity-70"
+                  muted
+                  playsInline
+                />
+              )}
+              <div className="absolute inset-0 bg-black/25" />
+            </div>
+          )}
+
+          {/* Media Element: Image or Video */}
+          <div
+            className="relative z-10 w-full h-full flex items-center justify-center cursor-move"
+            onPointerDown={handleClipPointerDown}
+          >
+            {isImageMedia ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={activeMediaUrl || ""}
+                alt={activeLiveItem?.asset.name || "Preview"}
+                className={`w-full h-full ${activeClip?.fitMode === "fill" ? "object-cover" : "object-contain"} ${!activeClip || isFileMissing ? "hidden" : ""}`}
+                style={{
+                  transform: transformStyle,
+                  opacity: evaluatedTransform ? evaluatedTransform.opacity : undefined,
+                  clipPath,
+                  transformOrigin: "center center",
+                  filter: colorFilterStyle,
+                }}
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                className={`w-full h-full ${activeClip?.fitMode === "fill" ? "object-cover" : "object-contain"} ${!activeClip || isFileMissing ? "hidden" : ""}`}
+                style={{
+                  transform: transformStyle,
+                  opacity: evaluatedTransform ? evaluatedTransform.opacity : undefined,
+                  clipPath,
+                  transformOrigin: "center center",
+                  filter: colorFilterStyle,
+                }}
+                playsInline
+              />
+            )}
+
+            {/* Temperature Tint Overlay */}
+            {tempTint && activeClip && !isFileMissing && (
+              <div
+                className="absolute pointer-events-none"
+                style={{
+                  width: `${fittedWidthPct}%`,
+                  height: `${fittedHeightPct}%`,
+                  backgroundColor: tempTint.color,
+                  opacity: tempTint.alpha,
+                  transform: transformStyle,
+                  clipPath,
+                  transformOrigin: "center center",
+                }}
+              />
+            )}
+
+            {/* Selection Bounding Box & Handles for Selected Clip */}
+            {isClipSelected && activeClip && !isFileMissing && (
+              <div
+                className="absolute inset-0 pointer-events-none border-2 border-cs-accent z-20"
+                style={{
+                  transform: transformStyle,
+                  transformOrigin: "center center",
+                }}
+              >
+                {/* 4 Corner Scale Handles */}
+                <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-cs-accent rounded-sm shadow pointer-events-auto cursor-nwse-resize" />
+                <div className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-cs-accent rounded-sm shadow pointer-events-auto cursor-nesw-resize" />
+                <div className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-cs-accent rounded-sm shadow pointer-events-auto cursor-nesw-resize" />
+                <div className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-cs-accent rounded-sm shadow pointer-events-auto cursor-nwse-resize" />
+
+                {/* Top Rotation Handle with Stem */}
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-auto cursor-grab active:cursor-grabbing">
+                  <div className="w-3 h-3 rounded-full bg-white border-2 border-cs-accent shadow" />
+                  <div className="w-0.5 h-3 bg-cs-accent" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Magnetic Center Snap Guide Lines */}
+          {snapGuides.x !== undefined && (
+            <div
+              className="absolute top-0 bottom-0 w-px bg-cyan-400 z-40 pointer-events-none shadow-[0_0_8px_rgba(34,211,238,0.9)]"
+              style={{ left: `${snapGuides.x}px` }}
+            />
+          )}
+          {snapGuides.y !== undefined && (
+            <div
+              className="absolute left-0 right-0 h-px bg-cyan-400 z-40 pointer-events-none shadow-[0_0_8px_rgba(34,211,238,0.9)]"
+              style={{ top: `${snapGuides.y}px` }}
+            />
+          )}
+
+          {/* 9:16 Safe Area Margins Overlay */}
+          {targetAspectRatio === "9:16" && (
+            <div className="absolute inset-x-[6%] top-[12%] bottom-[18%] border border-dashed border-white/20 pointer-events-none z-30">
+              <span className="absolute top-1 left-1.5 text-[8px] font-mono text-white/30 uppercase tracking-wider">
+                Safe Area (9:16)
+              </span>
+            </div>
+          )}
+
+          {/* Active Transition Visual Preview Layer */}
+          {activeTransitions.length > 0 && (() => {
+            const trans = activeTransitions[0].transition;
+            const prog = activeTransitions[0].progress;
+            if (trans.type === "fade_to_black") {
+              return <div className="absolute inset-0 bg-black pointer-events-none z-15" style={{ opacity: prog }} />;
+            }
+            if (trans.type === "fade_from_black") {
+              return <div className="absolute inset-0 bg-black pointer-events-none z-15" style={{ opacity: 1 - prog }} />;
+            }
+            if (trans.type === "dip_black") {
+              const dip = prog < 0.5 ? prog * 2 : (1 - prog) * 2;
+              return <div className="absolute inset-0 bg-black pointer-events-none z-15" style={{ opacity: dip }} />;
+            }
+            if (trans.type === "fade_to_white") {
+              return <div className="absolute inset-0 bg-white pointer-events-none z-15" style={{ opacity: prog }} />;
+            }
+            if (trans.type === "fade_from_white") {
+              return <div className="absolute inset-0 bg-white pointer-events-none z-15" style={{ opacity: 1 - prog }} />;
+            }
+            if (trans.type === "dip_color") {
+              const dip = prog < 0.5 ? prog * 2 : (1 - prog) * 2;
+              const dipColor = typeof trans.params?.color === "string" ? trans.params.color : "#000000";
+              return <div className="absolute inset-0 pointer-events-none z-15" style={{ backgroundColor: dipColor, opacity: dip }} />;
+            }
+            return null;
+          })()}
 
           {/* Active Transition Indicator Badge */}
           {activeTransitions.length > 0 && (
             <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/85 border border-emerald-500/40 text-[11px] text-emerald-300 z-20 shadow-lg pointer-events-none">
               <span>✨</span>
               <span>
-                {activeTransitions[0].def?.name || activeTransitions[0].transition.type} (
+                {activeTransitions[0].def?.label || activeTransitions[0].transition.type} (
                 {Math.round(activeTransitions[0].progress * 100)}%)
               </span>
             </div>
@@ -503,6 +868,17 @@ export function TimelinePreview({
               currentTime={currentTime}
               compWidth={compSize.width}
               compHeight={compSize.height}
+              isSelected={selectedOverlayId === overlay.id}
+              isEditing={editingOverlayId === overlay.id}
+              inlineText={editingOverlayId === overlay.id ? inlineEditText : overlay.text}
+              onSelect={() => selectOverlay(overlay.id)}
+              onDoubleClick={() => {
+                setEditingOverlayId(overlay.id);
+                setInlineEditText(overlay.text);
+              }}
+              onPointerDown={(e) => handleOverlayPointerDown(e, overlay)}
+              onInlineTextChange={setInlineEditText}
+              onCommitInlineEdit={() => handleCommitInlineEdit(overlay.id)}
             />
           ))}
         </div>
@@ -603,11 +979,27 @@ function TextOverlayRenderer({
   currentTime,
   compWidth,
   compHeight,
+  isSelected,
+  isEditing,
+  inlineText,
+  onSelect,
+  onDoubleClick,
+  onPointerDown,
+  onInlineTextChange,
+  onCommitInlineEdit,
 }: {
   overlay: TextOverlay;
   currentTime: number;
   compWidth: number;
   compHeight: number;
+  isSelected: boolean;
+  isEditing: boolean;
+  inlineText: string;
+  onSelect: () => void;
+  onDoubleClick: () => void;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onInlineTextChange: (val: string) => void;
+  onCommitInlineEdit: () => void;
 }) {
   const animated = evaluateOverlayAnimation(overlay, currentTime);
   const isCaption = overlay.overlayType === "caption";
@@ -649,7 +1041,13 @@ function TextOverlayRenderer({
 
   return (
     <div
-      className={`absolute pointer-events-none select-none z-20 ${alignClass}`}
+      className={`absolute select-none z-20 ${alignClass} ${isEditing ? "pointer-events-auto" : "cursor-move pointer-events-auto"}`}
+      onPointerDown={isEditing ? undefined : onPointerDown}
+      onDoubleClick={onDoubleClick}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect();
+      }}
       style={{
         left: `${overlay.x * 100}%`,
         top: `${overlay.y * 100}%`,
@@ -675,7 +1073,34 @@ function TextOverlayRenderer({
             : undefined,
       }}
     >
-      {animated.renderedText}
+      {isEditing ? (
+        <textarea
+          autoFocus
+          value={inlineText}
+          onChange={(e) => onInlineTextChange(e.target.value)}
+          onBlur={onCommitInlineEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onCommitInlineEdit();
+            }
+          }}
+          className="bg-black/95 text-white outline-none border-2 border-cs-accent rounded p-1 resize-none font-inherit text-inherit"
+          style={{ minWidth: "160px", minHeight: "44px" }}
+        />
+      ) : (
+        <>
+          {animated.renderedText}
+          {isSelected && (
+            <div className="absolute -inset-1.5 pointer-events-none border-2 border-cs-accent rounded-sm">
+              <div className="absolute -top-1 -left-1 w-2 h-2 bg-white border border-cs-accent rounded-sm" />
+              <div className="absolute -top-1 -right-1 w-2 h-2 bg-white border border-cs-accent rounded-sm" />
+              <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-white border border-cs-accent rounded-sm" />
+              <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-white border border-cs-accent rounded-sm" />
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

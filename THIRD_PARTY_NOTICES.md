@@ -31,9 +31,47 @@ Content Studio relies on open-source dependencies. Below is an inventory of pack
 - **Repository:** https://github.com/facebook/react
 - **Usage:** User interface component library and DOM reconciliation.
 
+### Zustand
+- **Package:** `zustand`
+- **Version:** `^5.1.0` (resolved: `5.1.0`)
+- **License:** MIT License
+- **Copyright:** (c) 2019 Paul Henschel
+- **Repository:** https://github.com/pmndrs/zustand
+- **Usage:** High-performance client-side state management isolating 60 fps timeline interaction state from durable document storage.
+
+### React Resizable Panels
+- **Package:** `react-resizable-panels`
+- **Version:** `^4.24.1` (resolved: `4.24.1`)
+- **License:** MIT License
+- **Copyright:** (c) 2022 Brian Vaughn
+- **Repository:** https://github.com/bvaughn/react-resizable-panels
+- **Usage:** Resizable panel layouts for dual-monitor, timeline, and asset browser docking.
+
+### Lucide React
+- **Package:** `lucide-react`
+- **Version:** `^1.77.0` (resolved: `1.77.0`)
+- **License:** ISC License
+- **Copyright:** (c) 2020-2026 Lucide Contributors
+- **Repository:** https://github.com/lucide-icons/lucide
+- **Usage:** Iconography across timeline controls, playback transport, track headers, and toolbars.
+
+### Radix UI Primitives
+- **Packages:**
+  - `@radix-ui/react-slider` (resolved: `1.6.1`)
+  - `@radix-ui/react-popover` (resolved: `1.3.1`)
+  - `@radix-ui/react-dropdown-menu` (resolved: `2.2.1`)
+  - `@radix-ui/react-tooltip` (resolved: `1.4.1`)
+  - `@radix-ui/react-tabs` (resolved: `1.2.1`)
+  - `@radix-ui/react-context-menu` (resolved: `2.4.1`)
+  - `@radix-ui/react-switch` (resolved: `1.4.1`)
+- **License:** MIT License
+- **Copyright:** (c) 2022 WorkOS
+- **Repository:** https://github.com/radix-ui/primitives
+- **Usage:** Accessible unstyled UI components for context menus, timeline zoom sliders, tooltips, and tab panels.
+
 ### Browser-Whisper
 - **Package:** `browser-whisper`
-- **Version:** `^2.0.0` (resolved: `2.0.0`)
+- **Version:** `2.0.0` (resolved: `2.0.0`)
 - **License:** MIT License
 - **Repository:** https://github.com/tanpreetjolly/browser-whisper
 - **Website:** https://whisper.tanpreet.xyz

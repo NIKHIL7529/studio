@@ -563,14 +563,8 @@ describe("validateTimeline", () => {
     const videoTrack = tl.tracks.find((t) => t.type === "video")!;
     // We bypass createClip to inject invalid data
     const clip: TimelineClip = {
-      id: crypto.randomUUID(),
-      assetId: "a1",
-      trackId: videoTrack.id,
-      startTime: 0,
+      ...createClip("a1", videoTrack.id, 0, 0, 10),
       sourceIn: -1,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
     };
     tl = addClipToTrack(tl, videoTrack.id, clip);
     const errors = validateTimeline(tl);
@@ -581,14 +575,7 @@ describe("validateTimeline", () => {
     let tl = makeTimeline();
     const videoTrack = tl.tracks.find((t) => t.type === "video")!;
     const clip: TimelineClip = {
-      id: crypto.randomUUID(),
-      assetId: "a1",
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 5,
-      sourceOut: 5,
-      volume: 1,
-      muted: false,
+      ...createClip("a1", videoTrack.id, 0, 5, 5),
     };
     tl = addClipToTrack(tl, videoTrack.id, clip);
     const errors = validateTimeline(tl);
@@ -599,14 +586,7 @@ describe("validateTimeline", () => {
     let tl = makeTimeline();
     const videoTrack = tl.tracks.find((t) => t.type === "video")!;
     const clip: TimelineClip = {
-      id: crypto.randomUUID(),
-      assetId: "",
-      trackId: videoTrack.id,
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
+      ...createClip("", videoTrack.id, 0, 0, 10),
     };
     tl = addClipToTrack(tl, videoTrack.id, clip);
     const errors = validateTimeline(tl);
@@ -617,14 +597,7 @@ describe("validateTimeline", () => {
     let tl = makeTimeline();
     const videoTrack = tl.tracks.find((t) => t.type === "video")!;
     const clip: TimelineClip = {
-      id: crypto.randomUUID(),
-      assetId: "a1",
-      trackId: "",
-      startTime: 0,
-      sourceIn: 0,
-      sourceOut: 10,
-      volume: 1,
-      muted: false,
+      ...createClip("a1", "", 0, 0, 10),
     };
     tl = addClipToTrack(tl, videoTrack.id, clip);
     const errors = validateTimeline(tl);
@@ -635,10 +608,8 @@ describe("validateTimeline", () => {
     let tl = makeTimeline();
     // Inject invalid overlay directly
     const overlay: TextOverlay = {
-      id: crypto.randomUUID(),
+      ...createTextOverlay(5, 3),
       text: "Bad",
-      startTime: 5,
-      endTime: 3,
       x: 0,
       y: 0,
       fontSize: 32,
@@ -654,14 +625,7 @@ describe("validateTimeline", () => {
     let tl = makeTimeline();
     const videoTrack = tl.tracks.find((t) => t.type === "video")!;
     const badClip: TimelineClip = {
-      id: crypto.randomUUID(),
-      assetId: "",
-      trackId: "",
-      startTime: -1,
-      sourceIn: -1,
-      sourceOut: -2,
-      volume: 1,
-      muted: false,
+      ...createClip("", "", -1, -1, -2),
     };
     tl = addClipToTrack(tl, videoTrack.id, badClip);
     const errors = validateTimeline(tl);
@@ -963,6 +927,7 @@ describe("Timeline persistence & validation roundtrip", () => {
     doc.assets.push({
       id: assetId,
       name: "sample.mp4",
+      kind: "video",
       mediaType: "video",
       mimeType: "video/mp4",
       size: 1024,

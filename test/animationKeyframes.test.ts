@@ -8,6 +8,7 @@ import {
   applyPresetAsKeyframes,
 } from "../src/lib/animation/animationPresets.ts";
 import type { TimelineClip, ClipKeyframe, TextOverlay } from "../src/types/timeline.ts";
+import { DEFAULT_COLOR_ADJUSTMENTS } from "../src/lib/color/colorPresets.ts";
 
 describe("Animation & Keyframe Evaluation", () => {
   it("interpolates curves correctly across linear, ease-in, ease-out, ease-in-out, and hold", () => {
@@ -59,6 +60,17 @@ describe("Animation & Keyframe Evaluation", () => {
       sourceOut: 10,
       volume: 1.0,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
       animationPreset: {
         id: "preset-1",
         presetId: "ken_burns_in",
@@ -90,6 +102,17 @@ describe("Animation & Keyframe Evaluation", () => {
       sourceOut: 5,
       volume: 1.0,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
       animationPreset: {
         id: "preset-shake",
         presetId: "shake",
@@ -123,6 +146,17 @@ describe("Animation & Keyframe Evaluation", () => {
       sourceOut: 5,
       volume: 1.0,
       muted: false,
+      fitMode: "fit",
+      crop: { top: 0, right: 0, bottom: 0, left: 0 },
+      flipH: false,
+      flipV: false,
+      fadeIn: 0,
+      fadeOut: 0,
+      audioDetached: false,
+      playbackRate: 1.0,
+      preservePitch: true,
+      freezeFrameSourceTime: null,
+      color: { ...DEFAULT_COLOR_ADJUSTMENTS },
     };
 
     const withKfs = applyPresetAsKeyframes(clip, "fade_in", 1.0);
@@ -146,6 +180,8 @@ describe("Animation & Keyframe Evaluation", () => {
       fontSize: 24,
       color: "#ffffff",
       align: "center",
+      presetId: "classic",
+      activeWordColor: "#facc15",
       animationPreset: "typewriter",
     };
 
@@ -171,6 +207,8 @@ describe("Animation & Keyframe Evaluation", () => {
       fontSize: 24,
       color: "#ffffff",
       align: "center",
+      presetId: "classic",
+      activeWordColor: "#facc15",
       overlayType: "caption",
       wordTimings: [
         { word: "Local", start: 0.0, end: 1.0 },

@@ -35,6 +35,7 @@ test("compareRelinkMetadata accurately compares fingerprints and flags mismatche
   const asset: ProjectAsset = {
     id: "a0000000-0000-4000-8000-000000000001",
     name: "original.mp4",
+    kind: "video",
     mediaType: "video",
     mimeType: "video/mp4",
     size: 4,

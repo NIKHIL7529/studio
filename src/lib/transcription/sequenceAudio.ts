@@ -77,9 +77,9 @@ export async function renderTimelineAudioToWav(
     const trackGain = track.volume ?? 1.0;
 
     for (const clip of track.clips) {
-      if (clip.muted || (track.type === "video" && clip.embeddedAudioDisabled)) continue;
+      if (clip.muted || clip.freezeFrameSourceTime !== null || (track.type === "video" && clip.audioDetached)) continue;
 
-      const dur = clip.sourceOut - clip.sourceIn;
+      const dur = (clip.sourceOut - clip.sourceIn) / (clip.playbackRate || 1.0);
       if (dur <= 0) continue;
 
       const end = clip.startTime + dur;
@@ -123,7 +123,6 @@ export async function renderTimelineAudioToWav(
       const targetFrames = Math.max(1, Math.round(clipDuration * targetSampleRate));
 
       const tempMono = new Float32Array(targetFrames);
-      let framesWritten = 0;
 
       // Drain audio samples from source
       for await (const sample of sink.samples(item.sourceIn, item.sourceOut)) {
@@ -159,7 +158,6 @@ export async function renderTimelineAudioToWav(
           for (let s = 0; s < resampled.length && (destOffsetFrames + s) < targetFrames; s++) {
             tempMono[destOffsetFrames + s] += resampled[s] * item.volume;
           }
-          framesWritten += resampled.length;
         }
 
         sample.close();

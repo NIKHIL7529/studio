@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   TRANSITION_CATALOG,
-  getTransitionDefinition,
   filterTransitions,
   getTransitionTimeWindow,
   getTransitionProgress,
@@ -112,7 +111,7 @@ describe("Transitions Catalog & Evaluation", () => {
       putImageData: () => calls.push("putImageData"),
       globalAlpha: 1.0,
       fillStyle: "#000000",
-    } as any;
+    } as unknown as CanvasRenderingContext2D;
 
     let fromDrawn = false;
     let toDrawn = false;

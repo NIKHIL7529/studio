@@ -7,6 +7,7 @@
  * - Model download is user-controlled with transparent size and caching in OPFS.
  * - Exposes word-level timestamps when available, or segment-level timestamps.
  * - Reconciles streaming segments, validates monotonicity, and ensures complete source coverage.
+ * - Reuses loaded model instances across sequential files in a batch to prevent redundant worker spawns.
  */
 
 import type {
@@ -17,50 +18,26 @@ import type {
   SourceTranscript,
   ModelDownloadInfo,
 } from "../../types/transcription.ts";
+import {
+  SPEECH_MODEL_CATALOG,
+  getDefaultModelId,
+} from "./modelStorage.ts";
 
-export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = [
-  {
-    modelName: "whisper-tiny_timestamped",
-    label: "Whisper Tiny (Word-Level Timestamps)",
-    sizeBytes: 120 * 1024 * 1024,
-    sizeFormatted: "~120 MB",
-    isDownloaded: false,
-    supportsWordTimestamps: true,
-    description: "Lightweight, fastest model with precise word-level cut boundaries.",
-  },
-  {
-    modelName: "whisper-base_timestamped",
-    label: "Whisper Base (Word-Level Timestamps)",
-    sizeBytes: 206 * 1024 * 1024,
-    sizeFormatted: "~206 MB",
-    isDownloaded: false,
-    supportsWordTimestamps: true,
-    description: "Higher accuracy with word-level timestamps for complex speech.",
-  },
-  {
-    modelName: "whisper-tiny",
-    label: "Whisper Tiny (Segment Timestamps)",
-    sizeBytes: 120 * 1024 * 1024,
-    sizeFormatted: "~120 MB",
-    isDownloaded: false,
-    supportsWordTimestamps: false,
-    description: "Fastest segment-level transcription for low-memory devices.",
-  },
-  {
-    modelName: "whisper-base",
-    label: "Whisper Base (Segment Timestamps)",
-    sizeBytes: 206 * 1024 * 1024,
-    sizeFormatted: "~206 MB",
-    isDownloaded: false,
-    supportsWordTimestamps: false,
-    description: "Balanced general-purpose transcription with sentence cues.",
-  },
-];
+export const LOCAL_WHISPER_MODELS: ModelDownloadInfo[] = SPEECH_MODEL_CATALOG.map((m) => ({
+  modelName: m.id,
+  label: `${m.label} (${m.estimatedSizeFormatted})`,
+  sizeBytes: m.estimatedSizeBytes,
+  sizeFormatted: m.estimatedSizeFormatted,
+  isDownloaded: false,
+  supportsWordTimestamps: m.supportsWordTimestamps,
+  description: `${m.languages} • ${m.hardwareRequirement}`,
+}));
 
 export class LocalTranscriptionEngine implements TranscriptionEngine {
   readonly name = "Local Whisper (WebGPU / WASM)";
   private activeWhisperInstance: unknown = null;
   private currentModel: string | null = null;
+  private currentLanguage: string | undefined = undefined;
 
   /**
    * Checks runtime browser capabilities (WebGPU, WASM, OPFS).
@@ -71,7 +48,7 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
     const hasWorker = typeof Worker !== "undefined";
 
     const canRunAsr = hasWasm && hasWorker;
-    const recommendedModel = hasWebGpu ? "whisper-tiny_timestamped" : "whisper-tiny";
+    const recommendedModel = getDefaultModelId(hasWebGpu);
 
     let message = "";
     if (!canRunAsr) {
@@ -128,9 +105,9 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
 
   /**
    * Transcribes a media file locally using the loaded model.
-   * If a WebGPU model (e.g. whisper-tiny_timestamped) fails due to WebGPU/driver limits,
-   * automatically falls back to CPU/WASM whisper-tiny for resilience.
-   * Ensures worker isolation so failures never cascade to subsequent files.
+   * If a WebGPU model (e.g. whisper-tiny_timestamped or parakeet) fails due to WebGPU/driver limits,
+   * automatically falls back to CPU/WASM whisper-tiny_timestamped for resilience.
+   * Reuses model instances across sequential calls when the model and language match.
    */
   async transcribe(
     file: File,
@@ -159,15 +136,15 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
         throw primaryErr;
       }
 
-      // If timestamped WebGPU model failed, try resilient WASM/CPU fallback with whisper-tiny
-      if (targetModel.endsWith("_timestamped")) {
-        console.warn(`[LocalTranscriptionEngine] Timestamped model "${targetModel}" encountered error (${primaryErr}). Attempting CPU/WASM fallback with "whisper-tiny"...`);
+      // If WebGPU model failed, try resilient WASM/CPU fallback with whisper-tiny_timestamped
+      if (targetModel.endsWith("_timestamped") || targetModel === "parakeet-tdt-0.6b-v3") {
+        console.warn(`[LocalTranscriptionEngine] Model "${targetModel}" encountered error (${primaryErr}). Attempting CPU/WASM fallback with "whisper-tiny_timestamped"...`);
         onProgress?.({
           stage: "loading-model",
           percent: 10,
-          statusText: "WebGPU pipeline recovery: switching to CPU/WASM Whisper model...",
+          statusText: "Pipeline recovery: switching to CPU/WASM Whisper model...",
         });
-        return await this.executeTranscriptionSession(file, "whisper-tiny", language, signal, onProgress, onCue);
+        return await this.executeTranscriptionSession(file, "whisper-tiny_timestamped", language, signal, onProgress, onCue);
       }
 
       throw primaryErr;
@@ -185,22 +162,43 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
     onProgress?.({
       stage: "loading-model",
       percent: 5,
-      statusText: `Initializing local Whisper model (${modelName})...`,
+      statusText: `Initializing local speech model (${modelName})...`,
     });
 
     const { BrowserWhisper } = await import("browser-whisper");
+    type WhisperInstance = InstanceType<typeof BrowserWhisper>;
 
-    // Create a dedicated instance for this session to ensure worker isolation
-    const transcriber = new BrowserWhisper({
-      model: modelName as Parameters<typeof BrowserWhisper.deleteModel>[0],
-      language,
-    });
-    this.activeWhisperInstance = transcriber;
-    this.currentModel = modelName;
+    // Reuse active instance if model and language match, avoiding redundant worker/model instantiation
+    let transcriber: WhisperInstance;
+    if (
+      this.activeWhisperInstance &&
+      this.currentModel === modelName &&
+      this.currentLanguage === language
+    ) {
+      transcriber = this.activeWhisperInstance as WhisperInstance;
+    } else {
+      if (this.activeWhisperInstance) {
+        try {
+          (this.activeWhisperInstance as WhisperInstance).dispose();
+        } catch { /* ignored */ }
+        this.activeWhisperInstance = null;
+      }
+      transcriber = new BrowserWhisper({
+        model: modelName as Parameters<typeof BrowserWhisper.deleteModel>[0],
+        language,
+      });
+      this.activeWhisperInstance = transcriber;
+      this.currentModel = modelName;
+      this.currentLanguage = language;
+    }
 
     if (signal?.aborted) {
-      transcriber.dispose();
+      try {
+        transcriber.dispose();
+      } catch { /* ignored */ }
       this.activeWhisperInstance = null;
+      this.currentModel = null;
+      this.currentLanguage = undefined;
       throw new DOMException("Transcription cancelled by user.", "AbortError");
     }
 
@@ -243,6 +241,9 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
           }
           transcriber.dispose();
         } catch { /* ignored */ }
+        this.activeWhisperInstance = null;
+        this.currentModel = null;
+        this.currentLanguage = undefined;
       };
       signal.addEventListener("abort", abortListener, { once: true });
     }
@@ -260,7 +261,7 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
         cueCounter++;
         const cueId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
-          : `whisper-${cueCounter}`;
+          : `cue-${cueCounter}`;
 
         const cue: TranscriptionCue = {
           id: cueId,
@@ -281,7 +282,11 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
       try {
         transcriber.dispose();
       } catch { /* ignored */ }
-      this.activeWhisperInstance = null;
+      if (this.activeWhisperInstance === transcriber) {
+        this.activeWhisperInstance = null;
+        this.currentModel = null;
+        this.currentLanguage = undefined;
+      }
 
       if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
         throw new DOMException("Transcription cancelled by user.", "AbortError");
@@ -291,13 +296,8 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
       if (signal && abortListener) {
         signal.removeEventListener("abort", abortListener);
       }
-      // Clean up worker after stream completion to guarantee no leftover locks or leaks
-      try {
-        transcriber.dispose();
-      } catch { /* ignored */ }
-      if (this.activeWhisperInstance === transcriber) {
-        this.activeWhisperInstance = null;
-      }
+      // Note: We retain this.activeWhisperInstance across successful sessions
+      // so sequential files in a batch reuse the worker and loaded weights.
     }
 
     // Sort and validate cues
@@ -340,8 +340,7 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
     const { BrowserWhisper } = await import("browser-whisper");
     await BrowserWhisper.deleteModel(modelName as Parameters<typeof BrowserWhisper.deleteModel>[0]);
     if (this.currentModel === modelName) {
-      this.currentModel = null;
-      this.activeWhisperInstance = null;
+      this.dispose();
     }
   }
 
@@ -352,6 +351,7 @@ export class LocalTranscriptionEngine implements TranscriptionEngine {
       } catch { /* ignored */ }
       this.activeWhisperInstance = null;
       this.currentModel = null;
+      this.currentLanguage = undefined;
     }
   }
 }

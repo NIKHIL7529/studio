@@ -77,6 +77,7 @@ test("validateAsset preserves valid metadata", () => {
   const asset: ProjectAsset = {
     id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     name: "audio.wav",
+    kind: "audio",
     mediaType: "audio",
     mimeType: "audio/wav",
     size: 1024,
@@ -98,6 +99,7 @@ test("validateProjectDocument persists asset metadata through document validatio
   doc.assets.push({
     id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     name: "clip.mp4",
+    kind: "video",
     mediaType: "video",
     mimeType: "video/mp4",
     size: 2048,
@@ -127,6 +129,7 @@ test("relinkAssetHandle resets metadata so newly relinked file is re-inspected",
   const asset: ProjectAsset = {
     id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
     name: "old-clip.mp4",
+    kind: "video",
     mediaType: "video",
     mimeType: "video/mp4",
     size: 1000,
